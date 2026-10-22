@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { shortModel } from '../models'
 import { PhArrowCounterClockwise, PhDownloadSimple, PhImage, PhStop, PhTrash, PhWarningCircle } from '@phosphor-icons/vue'
 
@@ -33,6 +33,22 @@ const scene = computed(() => {
   const m = props.job.prompt.match(/(?:integrated_multimodal_description|detailed_description):\s*([\s\S]*?)(\n\s*\n\s*overall_soundscape:|$)/)
   return (m ? m[1] : props.job.prompt).trim()
 })
+
+// The prompt is clamped to three lines; offer a toggle only when it actually overflows.
+const sceneEl = ref(null)
+const expanded = ref(false)
+const clamped = ref(false)
+let observer
+function measure() {
+  const el = sceneEl.value
+  if (el && !expanded.value) clamped.value = el.scrollHeight > el.clientHeight + 1
+}
+onMounted(() => {
+  measure()
+  observer = new ResizeObserver(measure)
+  observer.observe(sceneEl.value)
+})
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
@@ -62,7 +78,12 @@ const scene = computed(() => {
     </div>
 
     <div class="body">
-      <p class="scene" :title="scene">{{ scene }}</p>
+      <div class="prompt">
+        <p ref="sceneEl" class="scene" :class="{ open: expanded }">{{ scene }}</p>
+        <button v-if="clamped || expanded" class="more" @click="expanded = !expanded">
+          {{ expanded ? 'Show less' : 'Show more' }}
+        </button>
+      </div>
 
       <dl class="specs mono">
         <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
@@ -126,7 +147,14 @@ const scene = computed(() => {
 .scene {
   margin: 0; font-size: 13px; line-height: 1.5; color: var(--text);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-line;
 }
+.scene.open { display: block; -webkit-line-clamp: unset; }
+.more {
+  margin-top: 2px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--accent);
+}
+.more:hover { text-decoration: underline; }
 .specs { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 4px 18px; margin: 0; }
 .specs div { display: flex; flex-direction: column; }
 .specs dt { font-size: 10.5px; color: var(--muted); font-family: var(--font); }
