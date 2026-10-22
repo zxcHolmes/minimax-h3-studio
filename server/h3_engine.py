@@ -7,7 +7,8 @@ frame) and ref2va (reference images), and in two groups: the MiniMax-H3 checkpoi
 that take a LoRA, and FastVideo's distilled FastH3 checkpoints that run without one.
 Only one base is resident; a job on another base swaps it out. Each choice is a cheap
 ModelPatcher clone of the resident base, built on first use and kept until the base
-swaps. All generate() calls must come from a single thread.
+swaps. Pictures come from MOSS-Image, loaded on the first picture job and kept resident
+beside H3. All generate() / generate_image() calls must come from a single thread.
 """
 
 import gc
@@ -107,6 +108,17 @@ CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 
+# Picture generation: MOSS-Image SFT with the settings of ComfyUI's MOSS-Image text-to-image template.
+MOSS_REPO = "Comfy-Org/MOSS-Image"
+MOSS_UNET = "moss_image_sft_int8_convrot.safetensors"
+MOSS_CLIP = "qwen3.5_9b_w4a8_gptq.safetensors"
+MOSS_VAE = "flux2-vae_small.safetensors"
+IMAGE = {"steps": 25, "cfg": 2.5, "sampler": "er_sde", "scheduler": "simple",
+         "negative": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"}
+IMAGE_AREA = 1024 * 1024
+# The template's prompt expansion: Qwen3.5 rewrites a short (often Chinese) request into an English caption.
+MOSS_SYSTEM_PROMPT = (Path(__file__).resolve().parent / "moss_prompt_system.txt").read_text()
+
 # Keyframe tags the I2VA prompts in the repo and the ComfyUI docs open with.
 I2V_PREFIX = ("For the target video, at 0.00 seconds into the target video, "
               "<Picture 1> (from [Shot 1]) is fully referenced.")
@@ -121,20 +133,38 @@ def frame_count(duration):
     return n
 
 
+# Per-job LoRA strength; 1.0 is what the LoRAs were trained for.
+LORA_STRENGTH_RANGE = (0.0, 2.0)
+
+
 def unet_file(lora):
     """The base checkpoint a model choice runs on."""
     p = LORAS[lora]
     return p.get("unet") or UNETS[p["family"]]
 
 
-def model_info(lora):
+def model_info(lora, strength=1.0):
     """The checkpoints and sampling settings a model choice runs on, as shown to users."""
     p = LORAS[lora]
     vsa = p.get("vsa")
-    return {"unet": unet_file(lora), "lora": p["file"], "steps": p["steps"],
+    return {"unet": unet_file(lora), "lora": p["file"], "lora_strength": strength if p["file"] else None,
+            "steps": p["steps"],
             "sampler": "larryvrh turbo" if p["loader"] == "larryvrh" else p.get("sampler", "euler"),
             "shift_video": p["shift_video"], "shift_audio": p["shift_audio"],
             "attention": f"VSA {vsa['keep']}%" if vsa else None}
+
+
+def image_model_info():
+    """What picture jobs run on, as shown to users."""
+    return {"unet": MOSS_UNET, "lora": None, "lora_strength": None, "steps": IMAGE["steps"],
+            "sampler": IMAGE["sampler"], "cfg": IMAGE["cfg"], "text_encoder": MOSS_CLIP}
+
+
+def image_size(ratio):
+    """Picture width/height of about one megapixel at `ratio`, each a multiple of 16."""
+    width = max(16, round(math.sqrt(IMAGE_AREA * ratio) / 16) * 16)
+    height = max(16, round(math.sqrt(IMAGE_AREA / ratio) / 16) * 16)
+    return width, height
 
 
 class Canceled(Exception):
@@ -174,6 +204,7 @@ class H3Engine:
         self.family = None
         self.unet = None
         self.base = None
+        self._moss = None
         self._cancel = False
 
     def bootstrap(self):
@@ -242,18 +273,21 @@ class H3Engine:
                 self._lora_model(key)
         return True
 
-    def _lora_model(self, key):
-        """(model, sigmas, sampler) for a model choice on the resident DiT."""
-        if key not in self._models:
+    def _lora_model(self, key, strength=1.0):
+        """(model, sigmas, sampler) for a model choice at a LoRA strength on the resident DiT."""
+        if (key, strength) not in self._models:
+            # Keep the full-strength clones plus only the latest other strength: each holds its LoRA weights.
+            for cached in [c for c in self._models if c[1] != 1.0]:
+                del self._models[cached]
             p = LORAS[key]
             model = self.n["SigmaShift"].execute(self.base, p["shift_video"], p["shift_audio"])[0]
             if p["loader"] == "larryvrh":
                 turbo = self._larryvrh_nodes()
-                model = turbo.MiniMaxH3TurboLoRA().apply_lora(model, p["file"], 1.0)[0]
+                model = turbo.MiniMaxH3TurboLoRA().apply_lora(model, p["file"], strength)[0]
                 sampler = turbo.MiniMaxH3TurboSampler().get_sampler()[0]
             else:
                 if p["file"]:
-                    model = self.nodes.LoraLoaderModelOnly().load_lora_model_only(model, p["file"], 1.0)[0]
+                    model = self.nodes.LoraLoaderModelOnly().load_lora_model_only(model, p["file"], strength)[0]
                 sampler = self._sampler(p.get("sampler", "euler"))
             if p.get("vsa"):
                 from comfy_extras.nodes_model_advanced import ModelAttentionBackend
@@ -264,8 +298,8 @@ class H3Engine:
                     start_percent=p["vsa"]["start"], end_percent=1.0, dense_blocks="", min_tokens=12288,
                     extra_tokens=256, sink_conditioning="exact_kv_and_rows")[0]
             sigmas = self.n["BasicScheduler"].execute(model, "simple", p["steps"], 1.0)[0]
-            self._models[key] = (model, sigmas, sampler)
-        return self._models[key]
+            self._models[(key, strength)] = (model, sigmas, sampler)
+        return self._models[(key, strength)]
 
     def _larryvrh_nodes(self):
         if self._turbo is None:
@@ -280,8 +314,8 @@ class H3Engine:
         if self._cancel:
             raise Canceled()
 
-    def generate(self, *, lora, prompt, width, height, duration, seed, image_path=None, last_image_path=None,
-                 ref_paths=(), video_path, thumb_path, on_progress):
+    def generate(self, *, lora, prompt, width, height, duration, seed, lora_strength=1.0, image_path=None,
+                 last_image_path=None, ref_paths=(), video_path, thumb_path, on_progress):
         """Run one job; on_progress(stage, fraction) is called from this thread."""
         import torch
 
@@ -293,7 +327,7 @@ class H3Engine:
             on_progress("loading", 0.0)
             timings["loading"] = time.perf_counter()
             self._use_base(lora)
-        model, sigmas, sampler = self._lora_model(lora)
+        model, sigmas, sampler = self._lora_model(lora, lora_strength)
         steps = LORAS[lora]["steps"]
 
         def stage(name):
@@ -355,7 +389,90 @@ class H3Engine:
         durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
                      for i, n in enumerate(names)}
         return {"frames": int(images.shape[0]), "steps": steps, "timings": durations,
-                "models": model_info(lora)}
+                "models": model_info(lora, lora_strength)}
+
+    def _moss_models(self):
+        """(model, clip, vae) for pictures, loaded on first use and kept beside H3."""
+        if self._moss is None:
+            model = self.nodes.UNETLoader().load_unet(MOSS_UNET, "default")[0]
+            clip = self.nodes.CLIPLoader().load_clip(MOSS_CLIP, "moss_image", "default")[0]
+            vae = self.nodes.VAELoader().load_vae(MOSS_VAE)[0]
+            self._moss = (model, clip, vae)
+        return self._moss
+
+    def generate_image(self, *, prompt, width, height, seed, enhance, image_path, thumb_path, on_progress):
+        """Render one picture with MOSS-Image; returns the result record, including the prompt it used."""
+        import torch
+        from comfy_extras.nodes_flux import EmptyFlux2LatentImage
+        from comfy_extras.nodes_textgen import TextGenerate
+
+        self._cancel = False
+        self.mm.interrupt_current_processing(False)
+        timings = {}
+        current = {"stage": None}
+
+        def stage(name):
+            current["stage"] = name
+            on_progress(name, 0.0)
+            timings[name] = time.perf_counter()
+
+        def hook(value, total, preview, node_id=None):
+            if current["stage"] == "sampling" and total:
+                on_progress("sampling", value / total)
+
+        self.utils.set_progress_bar_global_hook(hook)
+        try:
+            with torch.inference_mode():
+                if self._moss is None:
+                    stage("loading")
+                model, clip, vae = self._moss_models()
+                used = prompt
+                if enhance:
+                    stage("enhancing")
+                    sampling = {"sampling_mode": "on", "temperature": 0.7, "top_k": 64, "top_p": 0.95,
+                                "min_p": 0.05, "repetition_penalty": 1.0, "seed": seed, "presence_penalty": 0.0}
+                    used = TextGenerate.execute(clip=clip, prompt=prompt, max_length=4096, sampling_mode=sampling,
+                                                thinking=False, use_default_template=True, mtp="auto",
+                                                system_prompt=MOSS_SYSTEM_PROMPT)[0].strip() or prompt
+                    self._check()
+
+                stage("encoding")
+                positive = self.nodes.CLIPTextEncode().encode(clip, used)[0]
+                negative = self.nodes.CLIPTextEncode().encode(clip, IMAGE["negative"])[0]
+                latent = EmptyFlux2LatentImage.execute(width=width, height=height, batch_size=1)[0]
+                self._check()
+
+                stage("sampling")
+                samples = self.nodes.KSampler().sample(
+                    model, seed, IMAGE["steps"], IMAGE["cfg"], IMAGE["sampler"], IMAGE["scheduler"],
+                    positive, negative, latent, denoise=1.0)[0]
+                self._check()
+
+                stage("decoding")
+                images = self.nodes.VAEDecode().decode(vae, samples)[0]
+
+                stage("saving")
+                self._save_picture(images[0], image_path)
+                self._save_thumb(images[0], thumb_path)
+        except self.mm.InterruptProcessingException:
+            raise Canceled()
+        finally:
+            self.utils.set_progress_bar_global_hook(None)
+            self.mm.interrupt_current_processing(False)
+
+        end = time.perf_counter()
+        names = list(timings)
+        durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
+                     for i, n in enumerate(names)}
+        return {"steps": IMAGE["steps"], "timings": durations, "models": image_model_info(), "prompt_used": used}
+
+    @staticmethod
+    def _save_picture(frame, path):
+        import numpy as np
+        from PIL import Image
+
+        pixels = (frame.clamp(0, 1).cpu().float().numpy() * 255).round().astype(np.uint8)
+        Image.fromarray(pixels).save(path)
 
     @staticmethod
     def _save_thumb(frame, path):

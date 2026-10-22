@@ -14,6 +14,8 @@ const defaultLoras = ref({})
 const aspects = ref([])
 const durationRange = ref([2, 15])
 const maxRefs = ref(6)
+const strengthRange = ref([0, 2])
+const picture = ref(null)
 const PAGE_SIZE = 24
 const jobs = ref(null)
 const total = ref(0)
@@ -71,7 +73,7 @@ async function cancel(job) {
 }
 
 async function remove(job) {
-  if (!confirm('Delete this job and its video?')) return
+  if (!confirm('Delete this job and its output?')) return
   await api.remove(job.id)
   refresh()
 }
@@ -93,6 +95,16 @@ function reuse(job) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+async function useRef(job) {
+  await form.value?.useAsRef(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+async function useFrame(job) {
+  await form.value?.useAsFrame(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 onMounted(async () => {
   try {
     const p = await api.presets()
@@ -103,6 +115,8 @@ onMounted(async () => {
     aspects.value = p.aspect_ratios
     durationRange.value = p.duration_range
     maxRefs.value = p.max_refs || 6
+    strengthRange.value = p.lora_strength_range || [0, 2]
+    picture.value = p.image || null
   } catch { /* refresh() reports offline */ }
   refresh()
   clock = setInterval(() => { now.value = Date.now() }, 1000)
@@ -130,6 +144,8 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
         :aspects="aspects"
         :duration-range="durationRange"
         :max-refs="maxRefs"
+        :strength-range="strengthRange"
+        :picture="picture"
         :ready="ready"
         @created="created"
       />
@@ -139,7 +155,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </details>
     </aside>
 
-    <section ref="dailies" class="dailies" aria-label="Generated videos">
+    <section ref="dailies" class="dailies" aria-label="Generated videos and pictures">
       <h1 class="title">Dailies<span v-if="total" class="count mono">{{ total }}</span></h1>
 
       <div v-if="jobs === null" class="grid">
@@ -147,7 +163,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </div>
       <div v-else-if="!jobs.length" class="empty">
         <PhFilmSlate :size="34" weight="duotone" />
-        <p>No videos yet. Describe a scene and press Generate video; results show up here.</p>
+        <p>Nothing yet. Describe a scene and press Generate; videos and pictures show up here.</p>
       </div>
       <div v-else class="grid">
         <JobCard
@@ -158,6 +174,8 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
           @cancel="cancel"
           @remove="remove"
           @reuse="reuse"
+          @use-ref="useRef"
+          @use-frame="useFrame"
         />
       </div>
 

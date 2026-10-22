@@ -4,6 +4,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 
 - **Text to video**, **image to video** (first frame, or first + last frame) and **reference images to video** (up to 6 subjects).
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
+- **Picture generation** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), for making reference images and first frames; a finished picture goes into a video job with one click.
 - FastVideo's distilled [FastH3](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy) 8-step checkpoints as a second model group that runs without a LoRA.
 - Weights stay loaded between jobs; jobs run one at a time from a persistent queue.
 - Output is pixel-identical to the official ComfyUI example workflows with the same settings.
@@ -65,7 +66,7 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -77,6 +78,9 @@ Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth
 | `minimax_h3_turbo_v4_step600_ema` | `loras` | larryvrh/MiniMax-H3-Turbo-Lora | 0.8 GB |
 | `fastvideo_fasth3_8step_v2_pruned_int8_convrot` (FastH3, text / image) | `diffusion_models` | FastVideo/FastVideo-FastH3-Comfy | 22 GB |
 | `fasth3_omniref_8step_pruned_int8_convrot` (FastH3, reference) | `diffusion_models` | FastVideo/FastH3-Omni-Comfy | 22 GB |
+| `moss_image_sft_int8_convrot` (pictures) | `diffusion_models` | Comfy-Org/MOSS-Image | 5.4 GB |
+| `qwen3.5_9b_w4a8_gptq` (picture text encoder) | `text_encoders` | Comfy-Org/MOSS-Image | 7.3 GB |
+| `flux2-vae_small` (picture VAE) | `vae` | Comfy-Org/MOSS-Image | 0.25 GB |
 
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
@@ -87,6 +91,7 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 | Text | fl2va | prompt |
 | Image | fl2va | first frame, optional last frame |
 | Reference | ref2va | 1–6 images, each with a short subject description |
+| Picture | MOSS-Image | prompt (no video, no sound) |
 
 Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text. Job cards show the first lines of the prompt; long prompts expand with Show more.
 
@@ -109,6 +114,8 @@ Models come in two groups. **MiniMax-H3 + LoRA** runs the base model of the mode
 
 OmniRef at 768p does not show the green banded glow of the ref2v LoRAs. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
+**Pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). With Expand prompt on (the default), the Qwen3.5 text encoder first rewrites the request into a detailed English caption using the template's system prompt; the job card shows the expanded text. A picture takes about 16 s on a 4090 (13 s of sampling); Expand prompt adds about 45 s, because the w4a8 text encoder generates slowly on cu128; the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. Editing pictures is not supported.
+
 To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
 ## Deploying and operating
@@ -124,7 +131,7 @@ FORCE=1 ./deploy.sh server   # restart even while jobs are running or queued (th
 On the GPU machine:
 
 - Logs: `journalctl -u h3-server -f`
-- Data: `$H3_DEPLOY_DIR/data/` (`jobs.db`, `videos/`, `thumbs/`, `uploads/`)
+- Data: `$H3_DEPLOY_DIR/data/` (`jobs.db`, `videos/`, `pictures/`, `thumbs/`, `uploads/`)
 - Stop / start: `sudo systemctl stop h3-server` / `sudo systemctl start h3-server`
 
 Running without the deploy script: build the UI (`cd web && npm install && npm run build`), copy the repo to the GPU machine and, inside the ComfyUI Python environment, run `H3_COMFYUI=/path/to/ComfyUI H3_WEB_DIST=web/dist python server/app.py`.
@@ -134,14 +141,16 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 | Method | Path | |
 |---|---|---|
 | GET | `/api/health` | server state, running job, resident base model |
-| GET | `/api/presets` | resolutions, model groups, LoRAs, default LoRA per mode and resolution |
+| GET | `/api/presets` | resolutions, model groups, LoRAs, default LoRA per mode and resolution, picture sizes |
 | GET | `/api/jobs` | recent jobs |
 | POST | `/api/jobs` | create a job (multipart form, below) |
 | GET | `/api/jobs/{id}` | one job |
 | POST | `/api/jobs/{id}/cancel` | cancel a queued or running job |
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 
-`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`.
+`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`.
+
+A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `seed` (optional) and `enhance` (`1` / `0`, default `1`). The finished job has `picture_url`; `result.prompt_used` holds the prompt after expansion.
 
 ```bash
 curl -F resolution=544p -F duration=5 -F aspect_ratio=16:9 \

@@ -6,9 +6,9 @@ MiniMax-H3 Studio: a MiniMax-H3 video generation service that **does not need th
 
 - `comfy_launcher/`: headless launcher. Uses ComfyUI as a Python library and calls the nodes directly in the order of the official workflow, so it reuses ComfyUI's quantized checkpoints (int8 DiT, nvfp4 text encoder) and DynamicVRAM memory management. Output is **pixel-identical** to the official ComfyUI workflow (PSNR inf).
 - `server/`: resident HTTP server. Weights load once, one job runs at a time, with a job queue and a sqlite record.
-- `web/`: Vue 3 frontend with three modes: text to video, image to video (first frame / first + last frame) and reference images (Ref2VA).
+- `web/`: Vue 3 frontend with four modes: text to video, image to video (first frame / first + last frame), reference images (Ref2VA) and picture generation (MOSS-Image, mode t2i).
 - `deploy.sh`: one-command deploy to the GPU machine; also downloads models remotely (`./deploy.sh models`).
-- `scripts/prepare_models.py`: downloads every model the server uses (base models, text encoder, VAEs, LoRAs) into `$H3_COMFYUI/models`.
+- `scripts/prepare_models.py`: downloads every model the server uses (base models, text encoders, VAEs, LoRAs, MOSS-Image) into `$H3_COMFYUI/models`.
 
 Deployment settings come from environment variables. Locally they live in `.env` (git-ignored); `.env.example` is the documented template. When adding a setting, update both `.env.example` and the configuration table in the README.
 
@@ -67,24 +67,25 @@ Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo)
   - `--lora-loader larryvrh` loads larryvrh's custom nodes. Arguments after `--` are passed through to ComfyUI.
 - `comfy_launcher/bench.sh`: wraps run_h3.py, records peak VRAM with nvidia-smi and uses `flock gpu.lock` to run tests one at a time.
 - `comfy_launcher/prompts_*.json`: test prompts.
-- `scripts/prepare_models.py`: standard library only, runs with any python3. The file list is built from `UNETS`, `CLIP`, the VAE constants and `LORAS` in `h3_engine.py`; existing files are skipped, `.part` files allow resuming, and `HF_ENDPOINT` selects a mirror. ComfyUI itself and the larryvrh custom node are cloned by the user, not by this script.
+- `scripts/prepare_models.py`: standard library only, runs with any python3. The file list is built from `UNETS`, `CLIP`, the VAE constants, the `MOSS_*` constants and `LORAS` in `h3_engine.py`; existing files are skipped, `.part` files allow resuming, and `HF_ENDPOINT` selects a mirror. ComfyUI itself and the larryvrh custom node are cloned by the user, not by this script.
 - `server/h3_engine.py`: resident engine.
   - The text encoder and VAEs stay loaded. Only one base DiT is resident at a time (H3 fl2va / ref2va or a FastH3 base, see `unet_file()`); `_use_base()` unloads the old base before loading the new one. Because DynamicVRAM streams weights from mmap, a switch takes under a second.
   - Each model choice is a ModelPatcher clone of the resident base carrying its own LoRA (if any), SigmaShift, sampler and attention patches. It is created on first use and cached until the base switches, so switching LoRAs on the same base does not reload the base.
-  - `generate()` must only be called from the worker thread.
+  - `generate()` and `generate_image()` must only be called from the worker thread.
+  - Pictures: `generate_image()` runs MOSS-Image with the ComfyUI template settings (`IMAGE`: 25 steps, cfg 2.5, er_sde, simple, the template's negative prompt; ~1 MP sizes from `image_size()`). The MOSS UNET, text encoder (CLIPLoader type `moss_image`) and VAE load lazily on the first picture job and stay loaded next to the H3 models; DynamicVRAM moves weights as needed. With `enhance`, `TextGenerate` on the MOSS text encoder first expands the prompt using `server/moss_prompt_system.txt` (the template's system prompt); the result is stored in `result.prompt_used`.
 - `server/h3_jobs.py`: sqlite job store with a thread lock. The `result` and `refs` columns hold JSON. New columns get an ALTER TABLE migration in `__init__`.
 - `server/app.py`: aiohttp server.
   - A worker thread loads the models and runs jobs one at a time in FIFO order.
-  - Endpoints: `/api/health`, `/api/presets`, `GET/POST /api/jobs`, `/api/jobs/{id}`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`. Static files are under `/files/{videos,thumbs,uploads}`; every other path goes to the frontend.
-  - `POST /api/jobs` takes a multipart form: `prompt`, `resolution` (544p / 768p), `lora` (optional; defaults to the recommended LoRA; the server checks that its base family and resolution match), `duration` (2–15 s), `seed`, `aspect_ratio` (`image` follows the input picture's ratio), `image`, `last_image`, `ref_image` (up to 6, repeatable). The job mode is one of t2v / i2v / fl2v / r2v.
-  - `/api/presets` returns `resolutions`, `groups`, `loras` (each with `group`) and `default_loras`. The job's `preset` column holds the resolution and the `lora` column the LoRA key; old combined ids such as `ref-544p` are migrated at startup by `backfill_lora(LEGACY_PRESETS)`.
+  - Endpoints: `/api/health`, `/api/presets`, `GET/POST /api/jobs`, `/api/jobs/{id}`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`. Static files are under `/files/{videos,pictures,thumbs,uploads}`; every other path goes to the frontend.
+  - `POST /api/jobs` takes a multipart form: `prompt`, `resolution` (544p / 768p), `lora` (optional; defaults to the recommended LoRA; the server checks that its base family and resolution match), `lora_strength` (0–2, default 1; stored in the `lora_strength` column and recorded in `result.models`; the engine caches clones per (LoRA, strength) and keeps only the latest non-1.0 strength), `duration` (2–15 s), `seed`, `aspect_ratio` (`image` follows the input picture's ratio), `image`, `last_image`, `ref_image` (up to 6, repeatable). The job mode is one of t2v / i2v / fl2v / r2v. A form with `kind=image` creates a t2i picture job instead (`prompt`, `aspect_ratio`, `seed`, `enhance`); no input images, resolution or LoRA, and the PNG name goes in the `picture` column.
+  - `/api/presets` returns `resolutions`, `groups`, `loras` (each with `group`), `default_loras` and `image` (picture sizes per aspect ratio and the MOSS models). The job's `preset` column holds the resolution and the `lora` column the LoRA key; old combined ids such as `ref-544p` are migrated at startup by `backfill_lora(LEGACY_PRESETS)`.
   - LoRAs and jobs carry a `models` field (base, LoRA, sampler, shift) for the frontend to display. Finished jobs read the models they actually ran on from `result.models`, so later LoRA config changes do not relabel old jobs.
   - index.html is re-read on every request, so a frontend-only deploy needs no restart.
 - `server/h3-server.service.in`: systemd unit template. `deploy.sh` replaces placeholders such as `@USER@` and `@DIR@` with values from `.env` before installing it; the unit activates ComfyUI's Python environment and then runs `app.py`.
-- `web/src/components/GenerateForm.vue`: generation form. The prompt is edited in picture / sound / music sections, or as the raw prompt; also resolution, model group (MiniMax-H3 + LoRA or FastH3), model choice (filtered by group, mode and resolution, recommended one marked), aspect ratio, duration ruler, seed and reuse.
+- `web/src/components/GenerateForm.vue`: generation form. The prompt is edited in picture / sound / music sections, or as the raw prompt; also resolution, model group (MiniMax-H3 + LoRA or FastH3), model choice (filtered by group, mode and resolution, recommended one marked), aspect ratio, duration ruler, seed and reuse. The Picture tab has its own prompt, aspect ratio and Expand prompt toggle; `useAsRef` / `useAsFrame` take a finished picture into the Reference or Frames mode.
 - `web/src/components/RefImages.vue`: reference image list, each image with a subject description. Image N is `<Subject N>` / `<Picture N>`.
 - `web/src/components/ImageDrop.vue`: drag-and-drop upload for the first / last frame.
-- `web/src/components/JobCard.vue`: job card with progress, video and reuse button; the prompt is clamped to three lines with a Show more toggle.
+- `web/src/components/JobCard.vue`: job card with progress, video or picture, reuse button, and Reference / Frame buttons on pictures; the prompt is clamped to three lines with a Show more toggle.
 - `doc/animated-short-workflow.md`: the agent workflow for making an animated series through the API (character bible, casting clips as references, storyboards, QC, ffmpeg assembly). Follow it when asked to make a multi-shot or multi-episode video.
 - `web/src/style.css`: design tokens, with light and dark sets.
 
@@ -102,7 +103,7 @@ FORCE=1 ./deploy.sh server   # restart even while jobs are running or queued (th
 - `deploy.sh` reads `.env` first; environment variables already set on the command line take precedence over `.env`. Each setting is documented in `.env.example`.
 - The server code (`server/` and `comfy_launcher/run_h3.py`) is rsynced to `$H3_DEPLOY_DIR` (default: the remote user's `~/minimax-h3-studio`); then the systemd unit is rendered, installed and restarted, and `/api/health` is polled until the state is ready.
 - URL: `http://<host of H3_DEPLOY_HOST>:<H3_PORT>`
-- Data directory on the server: `$H3_DEPLOY_DIR/data/`, containing `jobs.db`, `videos/`, `thumbs/`, `uploads/`.
+- Data directory on the server: `$H3_DEPLOY_DIR/data/`, containing `jobs.db`, `videos/`, `pictures/`, `thumbs/`, `uploads/`.
 - Logs: `ssh $H3_DEPLOY_HOST journalctl -u h3-server -f`
 - Environment variables read by the server process: `H3_COMFYUI` (required), `H3_DATA`, `H3_WEB_DIST`, `H3_HOST`/`H3_PORT`, `H3_COMFY_ARGS`.
 

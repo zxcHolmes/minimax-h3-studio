@@ -1,18 +1,21 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { shortModel } from '../models'
-import { PhArrowCounterClockwise, PhDownloadSimple, PhImage, PhStop, PhTrash, PhWarningCircle } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
 const props = defineProps({ job: Object, now: Number })
-const emit = defineEmits(['cancel', 'remove', 'reuse'])
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame'])
 
-const STAGES = { loading: 'Switching model', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
-const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference' }
+const STAGES = { loading: 'Loading model', enhancing: 'Expanding the prompt', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
+const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
+// Pictures: the prompt expansion takes about three times as long as sampling; decoding a single image is instant.
+const PICTURE_SPANS = { loading: [0, 0], enhancing: [0, 0.7], encoding: [0.7, 0.72], sampling: [0.72, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
+const isPicture = computed(() => props.job.mode === 't2i')
 const overall = computed(() => {
-  const span = SPANS[props.job.stage]
+  const span = (isPicture.value ? PICTURE_SPANS : SPANS)[props.job.stage]
   return span ? span[0] + (span[1] - span[0]) * (props.job.progress || 0) : 0
 })
 
@@ -54,8 +57,11 @@ onBeforeUnmount(() => observer?.disconnect())
 <template>
   <article class="card" :class="job.status">
     <div class="screen" :style="{ aspectRatio: `${job.width} / ${job.height}` }">
+      <a v-if="job.status === 'done' && job.picture_url" :href="job.picture_url" target="_blank" rel="noopener">
+        <img class="picture" :src="job.picture_url" :alt="job.prompt" loading="lazy" />
+      </a>
       <video
-        v-if="job.status === 'done' && job.video_url"
+        v-else-if="job.status === 'done' && job.video_url"
         :src="job.video_url"
         :poster="job.thumb_url"
         controls
@@ -85,15 +91,20 @@ onBeforeUnmount(() => observer?.disconnect())
         </button>
       </div>
 
+      <details v-if="job.result?.prompt_used && job.result.prompt_used !== job.prompt" class="expanded">
+        <summary>Expanded prompt</summary>
+        <p>{{ job.result.prompt_used }}</p>
+      </details>
+
       <dl class="specs mono">
         <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
         <div><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
-        <div><dt>Length</dt><dd>{{ clipLength }}s</dd></div>
+        <div v-if="!isPicture"><dt>Length</dt><dd>{{ clipLength }}s</dd></div>
         <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
       </dl>
 
       <p v-if="job.models" class="models mono" :title="[job.models.unet, job.models.lora].filter(Boolean).join('\n')">
-        {{ shortModel(job.models.unet) }}<template v-if="job.models.lora"> + {{ shortModel(job.models.lora) }}</template>
+        {{ shortModel(job.models.unet) }}<template v-if="job.models.lora"> + {{ shortModel(job.models.lora) }}<template v-if="(job.models.lora_strength ?? 1) !== 1"> ×{{ job.models.lora_strength }}</template></template>
       </p>
 
       <details v-if="job.status === 'failed' && job.error" class="error">
@@ -102,7 +113,7 @@ onBeforeUnmount(() => observer?.disconnect())
       </details>
 
       <footer class="foot">
-        <span class="meta mono" :title="`seed ${job.seed}`">{{ job.preset }} · {{ created }}</span>
+        <span class="meta mono" :title="`seed ${job.seed}`">{{ [job.preset, created].filter(Boolean).join(' · ') }}</span>
         <div class="actions">
           <button v-if="job.status === 'queued' || job.status === 'running'" class="btn danger small" @click="emit('cancel', job)">
             <PhStop :size="13" weight="fill" />Cancel
@@ -111,6 +122,13 @@ onBeforeUnmount(() => observer?.disconnect())
             <a v-if="job.video_url" class="btn small" :href="job.video_url" :download="`h3_${job.id}.mp4`">
               <PhDownloadSimple :size="14" />Download
             </a>
+            <template v-if="job.picture_url">
+              <a class="btn icon small" :href="job.picture_url" :download="`moss_${job.id}.png`" aria-label="Download" title="Download">
+                <PhDownloadSimple :size="14" />
+              </a>
+              <button class="btn small" title="Use as a reference image" @click="emit('use-ref', job)"><PhUserFocus :size="14" />Reference</button>
+              <button class="btn small" title="Use as the first frame" @click="emit('use-frame', job)"><PhFilmStrip :size="14" />Frame</button>
+            </template>
             <button class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
             <button class="btn icon small danger" aria-label="Delete" @click="emit('remove', job)"><PhTrash :size="14" /></button>
           </template>
@@ -126,7 +144,8 @@ onBeforeUnmount(() => observer?.disconnect())
   overflow: hidden; display: flex; flex-direction: column;
 }
 .screen { position: relative; background: var(--screen); max-height: 420px; width: 100%; }
-.screen video { width: 100%; height: 100%; display: block; object-fit: contain; background: var(--screen); }
+.screen video, .picture { width: 100%; height: 100%; display: block; object-fit: contain; background: var(--screen); }
+.screen > a { display: block; width: 100%; height: 100%; }
 .ghost { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .28; filter: blur(1px); }
 .state {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -155,6 +174,8 @@ onBeforeUnmount(() => observer?.disconnect())
   font: inherit; font-size: 12px; color: var(--accent);
 }
 .more:hover { text-decoration: underline; }
+.expanded summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+.expanded p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-2); max-height: 200px; overflow: auto; }
 .specs { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 4px 18px; margin: 0; }
 .specs div { display: flex; flex-direction: column; }
 .specs dt { font-size: 10.5px; color: var(--muted); font-family: var(--font); }
@@ -165,8 +186,8 @@ onBeforeUnmount(() => observer?.disconnect())
 }
 .error summary { cursor: pointer; color: var(--live); font-size: 12px; }
 .error pre { white-space: pre-wrap; font-size: 11px; color: var(--live); max-height: 200px; overflow: auto; margin: 6px 0 0; }
-.foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
-.meta { font-size: 11px; color: var(--muted); }
+.foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
+.meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .actions { display: flex; gap: 6px; }
 .small { padding: 4px 11px; font-size: 12px; }
 .icon.small { padding: 5px; }

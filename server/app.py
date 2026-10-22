@@ -2,7 +2,7 @@
 
 Environment:
     H3_COMFYUI     ComfyUI checkout            (required)
-    H3_DATA        jobs.db, videos, uploads    (default <repo>/data)
+    H3_DATA        jobs.db, videos, pictures, uploads (default <repo>/data)
     H3_WEB_DIST    built frontend              (default <repo>/web_dist)
     H3_HOST/H3_PORT                            (default 0.0.0.0:8190)
     H3_COMFY_ARGS  extra ComfyUI CLI flags     (default triton + sage attention)
@@ -22,8 +22,8 @@ from pathlib import Path
 from aiohttp import web
 
 from h3_engine import (
-    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORAS, MAX_REFS, RESOLUTIONS, Canceled, H3Engine, canvas_size,
-    model_info, with_keyframe_prefix,
+    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, RESOLUTIONS,
+    Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
 
@@ -35,7 +35,7 @@ HOST = os.environ.get("H3_HOST", "0.0.0.0")
 PORT = int(os.environ.get("H3_PORT", "8190"))
 COMFY_ARGS = shlex.split(os.environ.get("H3_COMFY_ARGS", "--enable-triton-backend --use-sage-attention"))
 
-VIDEOS, THUMBS, UPLOADS = DATA / "videos", DATA / "thumbs", DATA / "uploads"
+VIDEOS, PICTURES, THUMBS, UPLOADS = DATA / "videos", DATA / "pictures", DATA / "thumbs", DATA / "uploads"
 MAX_SEED = 2 ** 48
 MAX_PROMPT = 20000
 DURATION_RANGE = (2.0, 15.0)
@@ -89,9 +89,19 @@ class Worker(threading.Thread):
 
         video, thumb = f"{job_id}.mp4", f"{job_id}.jpg"
         try:
+            if job["mode"] == "t2i":
+                picture = f"{job_id}.png"
+                result = self.engine.generate_image(
+                    prompt=job["prompt"], width=job["width"], height=job["height"], seed=job["seed"],
+                    enhance=bool(job["enhance"]), image_path=PICTURES / picture, thumb_path=THUMBS / thumb,
+                    on_progress=on_progress)
+                self.store.update(job_id, status="done", stage="done", progress=1.0, picture=picture, thumb=thumb,
+                                  result=result, finished_at=time.time())
+                log.info("job %s done %s", job_id, {k: v for k, v in result.items() if k != "prompt_used"})
+                return
             result = self.engine.generate(
                 lora=job["lora"], prompt=job["prompt"], width=job["width"], height=job["height"],
-                duration=job["duration"], seed=job["seed"],
+                duration=job["duration"], seed=job["seed"], lora_strength=job_strength(job),
                 image_path=UPLOADS / job["image"] if job["image"] else None,
                 last_image_path=UPLOADS / job["last_image"] if job["last_image"] else None,
                 ref_paths=[UPLOADS / name for name in job["refs"]],
@@ -113,13 +123,23 @@ class Worker(threading.Thread):
 def job_view(job, positions):
     view = dict(job)
     view["queue_position"] = positions.get(job["id"])
-    for key, folder in (("video", "videos"), ("thumb", "thumbs"), ("image", "uploads"), ("last_image", "uploads")):
+    for key, folder in (("video", "videos"), ("picture", "pictures"), ("thumb", "thumbs"), ("image", "uploads"),
+                        ("last_image", "uploads")):
         view[f"{key}_url"] = f"/files/{folder}/{job[key]}" if job[key] else None
     view["ref_urls"] = [f"/files/uploads/{name}" for name in job["refs"]]
     # Finished jobs record what they ran on; others show what their LoRA will use.
     stored = (job["result"] or {}).get("models")
-    view["models"] = stored or (model_info(job["lora"]) if job["lora"] in LORAS else None)
+    if job["mode"] == "t2i":
+        view["models"] = stored or image_model_info()
+    else:
+        view["models"] = stored or (model_info(job["lora"], job_strength(job))
+                                    if job["lora"] in LORAS else None)
     return view
+
+
+def job_strength(job):
+    """Jobs from before the LoRA strength option ran at full strength."""
+    return 1.0 if job["lora_strength"] is None else job["lora_strength"]
 
 
 def queue_positions(store):
@@ -146,6 +166,8 @@ async def presets(request):
         "aspect_ratios": list(ASPECT_RATIOS),
         "duration_range": DURATION_RANGE,
         "max_refs": MAX_REFS,
+        "lora_strength_range": LORA_STRENGTH_RANGE,
+        "image": {"sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()}, "models": image_model_info()},
     })
 
 
@@ -193,6 +215,19 @@ async def create_job(request):
     raw_seed = (form.get("seed") or "").strip()
     seed = int(raw_seed) % MAX_SEED if raw_seed.lstrip("-").isdigit() else random.randrange(MAX_SEED)
 
+    if form.get("kind") == "image":
+        aspect = form.get("aspect_ratio") or "1:1"
+        if aspect not in ASPECT_RATIOS:
+            return bad_request(f"unknown aspect ratio {aspect}")
+        if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image")):
+            return bad_request("picture jobs take no input images")
+        width, height = image_size(ASPECT_RATIOS[aspect])
+        job = store.create(mode="t2i", prompt=prompt, width=width, height=height, seed=seed,
+                           enhance=int(form.get("enhance", "1") in ("1", "true", "on")), refs=[])
+        if worker.state == "ready":
+            worker.queue.put(job["id"])
+        return web.json_response(job_view(job, queue_positions(store)), status=201)
+
     def read_image(field, upload=None):
         """(bytes, suffix, (w, h)) for an uploaded picture, None when absent, raises ValueError if unreadable."""
         upload = form.get(field) if upload is None else upload
@@ -231,6 +266,14 @@ async def create_job(request):
                            (", which need ref_image" if LORAS[lora]["family"] == "ref2va" else ""))
     if resolution not in LORAS[lora]["resolutions"]:
         return bad_request(f"lora {lora} supports {', '.join(LORAS[lora]['resolutions'])}")
+    try:
+        lora_strength = round(float(form.get("lora_strength") or 1.0), 2)
+    except ValueError:
+        return bad_request("lora_strength must be a number")
+    if not LORA_STRENGTH_RANGE[0] <= lora_strength <= LORA_STRENGTH_RANGE[1]:
+        return bad_request(f"lora_strength must be within {LORA_STRENGTH_RANGE}")
+    if not LORAS[lora]["file"]:
+        lora_strength = 1.0  # FastH3 bases have no LoRA to scale
 
     def save(upload):
         name = f"{os.urandom(8).hex()}{upload[1]}"
@@ -254,8 +297,9 @@ async def create_job(request):
     mode = "r2v" if ref_names else "fl2v" if last_name else "i2v" if image_name else "t2v"
     if image_name:
         prompt = with_keyframe_prefix(prompt, duration, last_frame=bool(last_name))
-    job = store.create(mode=mode, preset=resolution, lora=lora, prompt=prompt, width=width, height=height,
-                       duration=duration, seed=seed, image=image_name, last_image=last_name, refs=ref_names)
+    job = store.create(mode=mode, preset=resolution, lora=lora, lora_strength=lora_strength, prompt=prompt,
+                       width=width, height=height, duration=duration, seed=seed, image=image_name,
+                       last_image=last_name, refs=ref_names)
     if worker.state == "ready":
         worker.queue.put(job["id"])
     return web.json_response(job_view(job, queue_positions(store)), status=201)
@@ -280,7 +324,8 @@ async def delete_job(request):
         raise web.HTTPNotFound()
     if job["status"] in ACTIVE:
         return bad_request("cancel the job before deleting it")
-    for folder, name in ((VIDEOS, job["video"]), (THUMBS, job["thumb"]), (UPLOADS, job["image"]),
+    for folder, name in ((VIDEOS, job["video"]), (PICTURES, job["picture"]), (THUMBS, job["thumb"]),
+                         (UPLOADS, job["image"]),
                          (UPLOADS, job["last_image"]), *((UPLOADS, n) for n in job["refs"])):
         if name:
             (folder / name).unlink(missing_ok=True)
@@ -298,7 +343,7 @@ async def index(request):
 
 
 def make_app():
-    for folder in (DATA, VIDEOS, THUMBS, UPLOADS):
+    for folder in (DATA, VIDEOS, PICTURES, THUMBS, UPLOADS):
         folder.mkdir(parents=True, exist_ok=True)
     store = JobStore(DATA / "jobs.db")
     store.backfill_lora(LEGACY_PRESETS)
@@ -315,6 +360,7 @@ def make_app():
     app.router.add_post("/api/jobs/{id}/cancel", cancel_job)
     app.router.add_delete("/api/jobs/{id}", delete_job)
     app.router.add_static("/files/videos", VIDEOS)
+    app.router.add_static("/files/pictures", PICTURES)
     app.router.add_static("/files/thumbs", THUMBS)
     app.router.add_static("/files/uploads", UPLOADS)
     app.router.add_get("/{path:.*}", frontend)

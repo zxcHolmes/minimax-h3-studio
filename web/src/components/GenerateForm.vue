@@ -8,7 +8,7 @@ import RefImages from './RefImages.vue'
 
 const props = defineProps({
   resolutions: Array, groups: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array,
-  maxRefs: Number,
+  maxRefs: Number, strengthRange: Array, picture: Object,
   ready: Boolean,
 })
 const emit = defineEmits(['created'])
@@ -34,6 +34,7 @@ const SECTION_RE = /^\s*integrated_multimodal_description:\s*([\s\S]*?)\n\s*\n\s
 const REF_SECTION_RE = /\n\s*detailed_description:\s*([\s\S]*?)\n\s*\n\s*overall_soundscape:\s*([\s\S]*?)\n\s*\n\s*non_diegetic_music:\s*([\s\S]*?)\s*$/
 const SUBJECT_RE = /^<Subject (\d+)> is ([\s\S]*?), as shown in <Picture \d+>\.$/gm
 const FAMILY = { t2v: 'fl2va', i2v: 'fl2va', r2v: 'ref2va' }
+const MODE_TABS = [['t2v', 'Text'], ['i2v', 'Frames'], ['r2v', 'Reference'], ['t2i', 'Picture']]
 
 const STORAGE_KEY = 'h3.form.v2'
 const saved = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {} } catch { return {} } })()
@@ -46,7 +47,12 @@ const raw = ref(saved.raw || '')
 const resolution = ref((saved.resolution || saved.preset || '768p').replace('ref-', ''))
 const group = ref(saved.group || 'h3')
 const lora = ref(saved.lora || '')
+const strength = ref(saved.strength ?? 1)
 const aspect = ref(saved.aspect || '16:9')
+// Picture mode keeps its own prompt and aspect so switching tabs leaves the video form intact.
+const picPrompt = ref(saved.picPrompt || '')
+const picAspect = ref(saved.picAspect || '1:1')
+const enhance = ref(saved.enhance ?? true)
 const duration = ref(saved.duration || 5)
 const seed = ref('')
 const imageFile = ref(null)
@@ -56,11 +62,12 @@ const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
 
-watch([mode, rawMode, sections, raw, resolution, group, lora, aspect, duration], () => {
+watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect, enhance], () => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       mode: mode.value, rawMode: rawMode.value, sections: sections.value, raw: raw.value,
-      resolution: resolution.value, group: group.value, lora: lora.value, aspect: aspect.value, duration: duration.value,
+      resolution: resolution.value, group: group.value, lora: lora.value, strength: strength.value, aspect: aspect.value, duration: duration.value,
+      picPrompt: picPrompt.value, picAspect: picAspect.value, enhance: enhance.value,
     }))
   } catch { /* storage unavailable */ }
 }, { deep: true })
@@ -194,12 +201,19 @@ const STEP_COST = {
 }
 const OVERHEAD = { '544p': 12, '768p': 20 }
 const estimate = computed(() => {
-  const cost = STEP_COST[group.value]?.[FAMILY[mode.value]][resolution.value] || 3.3
+  const cost = STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3
   return Math.round((OVERHEAD[resolution.value] || 20) + cost * (currentLora.value?.steps || 4) * duration.value)
 })
 
-const canSubmit = computed(() => props.ready && !submitting.value && hasContent.value && (
-  mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length)))
+const isPicture = computed(() => mode.value === 't2i')
+const pictureSize = computed(() => props.picture?.sizes?.[picAspect.value])
+// Measured on the RTX 4090: 25 steps at about one megapixel, plus the Qwen3.5 caption when expanding.
+const PICTURE_SECONDS = 16
+const ENHANCE_SECONDS = 45
+const pictureEstimate = computed(() => PICTURE_SECONDS + (enhance.value ? ENHANCE_SECONDS : 0))
+
+const canSubmit = computed(() => props.ready && !submitting.value && (isPicture.value ? !!picPrompt.value.trim() : hasContent.value && (
+  mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length))))
 
 watch(imageFile, (f) => {
   if (f) aspect.value = 'image'
@@ -220,9 +234,19 @@ async function submit() {
   submitting.value = true
   try {
     const form = new FormData()
+    if (isPicture.value) {
+      form.append('kind', 'image')
+      form.append('prompt', picPrompt.value)
+      form.append('aspect_ratio', picAspect.value)
+      form.append('enhance', enhance.value ? '1' : '0')
+      if (seed.value.trim()) form.append('seed', seed.value.trim())
+      emit('created', await api.create(form))
+      return
+    }
     form.append('prompt', prompt.value)
     form.append('resolution', resolution.value)
     form.append('lora', lora.value)
+    if (currentLora.value?.models.lora) form.append('lora_strength', String(strength.value))
     form.append('aspect_ratio', aspect.value)
     form.append('duration', String(duration.value))
     if (seed.value.trim()) form.append('seed', seed.value.trim())
@@ -241,6 +265,15 @@ async function submit() {
 
 // Load a past job's settings back into the form.
 function reuse(job) {
+  if (job.mode === 't2i') {
+    mode.value = 't2i'
+    picPrompt.value = job.prompt
+    enhance.value = !!job.enhance
+    seed.value = String(job.seed)
+    const match = Object.entries(props.picture?.sizes || {}).find(([, s]) => s[0] === job.width && s[1] === job.height)
+    if (match) picAspect.value = match[0]
+    return
+  }
   const descs = loadPrompt(job.prompt, job.mode === 'r2v' ? 'r2v' : 'i2v')
   resolution.value = job.preset
   duration.value = job.duration
@@ -249,6 +282,7 @@ function reuse(job) {
   if (choice) group.value = choice.group
   // After the mode watcher has reset the LoRA list for the reused job's mode.
   nextTick(() => { if (choice) lora.value = job.lora })
+  strength.value = job.lora_strength ?? 1
   const sizes = props.resolutions?.find((r) => r.id === job.preset)?.sizes || {}
   const match = Object.entries(sizes).find(([, s]) => s[0] === job.width && s[1] === job.height)
   if (job.mode === 'r2v') {
@@ -274,17 +308,78 @@ function reuse(job) {
   }
 }
 
-defineExpose({ reuse })
+// Send a finished picture into a video mode.
+async function useAsRef(job) {
+  const file = await fileFrom(job.picture_url, job.picture)
+  mode.value = 'r2v'
+  if (refs.value.length >= (props.maxRefs || 6)) {
+    error.value = `At most ${props.maxRefs || 6} reference images; remove one first.`
+    return
+  }
+  refs.value = [...refs.value, { id: `pic-${job.id}-${Date.now()}`, file, desc: '' }]
+}
+
+async function useAsFrame(job) {
+  imageFile.value = await fileFrom(job.picture_url, job.picture)
+  mode.value = 'i2v'
+}
+
+defineExpose({ reuse, useAsRef, useAsFrame })
 </script>
 
 <template>
   <form class="form" @submit.prevent="submit">
     <div class="modes" role="tablist" aria-label="Generation mode">
-      <button type="button" role="tab" :aria-selected="mode === 't2v'" :class="{ on: mode === 't2v' }" @click="mode = 't2v'">Text</button>
-      <button type="button" role="tab" :aria-selected="mode === 'i2v'" :class="{ on: mode === 'i2v' }" @click="mode = 'i2v'">Image</button>
-      <button type="button" role="tab" :aria-selected="mode === 'r2v'" :class="{ on: mode === 'r2v' }" @click="mode = 'r2v'">Reference</button>
+      <button
+        v-for="[id, label] in MODE_TABS"
+        :key="id"
+        type="button"
+        role="tab"
+        :aria-selected="mode === id"
+        :class="{ on: mode === id }"
+        @click="mode = id"
+      >{{ label }}</button>
     </div>
 
+    <template v-if="isPicture">
+      <div class="field">
+        <label for="pic-prompt" class="field-label">Prompt</label>
+        <textarea
+          id="pic-prompt"
+          v-model="picPrompt"
+          class="textarea"
+          rows="7"
+          spellcheck="false"
+          placeholder="一只红色鬃毛的小狮子，3D 动画电影风格，全身正面站在草原上，纯净背景"
+        />
+        <label class="toggle">
+          <input v-model="enhance" type="checkbox" />
+          <span>Expand prompt</span>
+        </label>
+        <p class="help">Qwen3.5 first rewrites a short request (Chinese is fine) into a detailed English caption.</p>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Aspect ratio</span>
+        <div class="chips">
+          <button
+            v-for="a in aspects"
+            :key="a"
+            type="button"
+            class="chip"
+            :class="{ on: picAspect === a }"
+            :aria-pressed="picAspect === a"
+            @click="picAspect = a"
+          >{{ a }}</button>
+        </div>
+        <dl v-if="picture" class="models">
+          <div><dt>Model</dt><dd class="mono" :title="picture.models.unet">{{ shortModel(picture.models.unet) }}</dd></div>
+          <div><dt>Sampler</dt><dd class="mono">{{ picture.models.sampler }} · {{ picture.models.steps }} steps · cfg {{ picture.models.cfg }}</dd></div>
+        </dl>
+      </div>
+    </template>
+
+    <template v-else>
     <div v-if="mode === 'r2v'" class="field">
       <span class="field-label">Reference images<span class="aside">People, objects or places; image N is &lt;Subject N&gt;</span></span>
       <RefImages v-model="refs" :max="maxRefs || 6" />
@@ -392,9 +487,22 @@ defineExpose({ reuse })
           <span class="lora-meta mono">{{ l.steps }} steps</span>
         </button>
       </div>
+      <div v-if="currentLora?.models.lora" class="strength">
+        <label for="strength" class="section-label">LoRA strength</label>
+        <input
+          id="strength"
+          v-model.number="strength"
+          type="range"
+          :min="strengthRange?.[0] ?? 0"
+          :max="strengthRange?.[1] ?? 2"
+          step="0.05"
+        />
+        <span class="mono strength-value">{{ strength.toFixed(2) }}</span>
+        <button v-if="strength !== 1" type="button" class="btn quiet small" @click="strength = 1">Reset</button>
+      </div>
       <dl v-if="currentLora" class="models">
         <div><dt>Base</dt><dd class="mono" :title="currentLora.models.unet">{{ shortModel(currentLora.models.unet) }}</dd></div>
-        <div v-if="currentLora.models.lora"><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }}</dd></div>
+        <div v-if="currentLora.models.lora"><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }} × {{ strength.toFixed(2) }}</dd></div>
         <div>
           <dt>Sampler</dt>
           <dd class="mono">{{ currentLora.models.sampler }} · {{ currentLora.steps }} steps · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
@@ -441,6 +549,7 @@ defineExpose({ reuse })
         </div>
       </div>
     </div>
+    </template>
 
     <div class="field">
       <label for="seed" class="field-label">Seed<span class="aside">Empty for random</span></label>
@@ -454,10 +563,16 @@ defineExpose({ reuse })
 
     <div class="submit">
       <span class="estimate">
-        <span v-if="outputSize" class="mono">{{ outputSize[0] }}×{{ outputSize[1] }}</span>
-        <span class="muted">About {{ estimate }} s</span>
+        <template v-if="isPicture">
+          <span v-if="pictureSize" class="mono">{{ pictureSize[0] }}×{{ pictureSize[1] }}</span>
+          <span class="muted">About {{ pictureEstimate }} s</span>
+        </template>
+        <template v-else>
+          <span v-if="outputSize" class="mono">{{ outputSize[0] }}×{{ outputSize[1] }}</span>
+          <span class="muted">About {{ estimate }} s</span>
+        </template>
       </span>
-      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? 'Submitting' : 'Generate video' }}</button>
+      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? 'Submitting' : isPicture ? 'Generate picture' : 'Generate video' }}</button>
     </div>
     <p v-if="!ready" class="help">The server is still loading models; you can submit once it is ready.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -470,7 +585,7 @@ defineExpose({ reuse })
 .small { padding: 3px 10px; font-size: 12px; }
 
 .modes {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px;
   background: var(--surface-sunk); border-radius: 999px;
 }
 .modes button {
@@ -489,6 +604,8 @@ defineExpose({ reuse })
 .section-label { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; }
 .tag { font-size: 10.5px; font-weight: 400; color: var(--muted); }
 .raw { font-size: 12.5px; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.toggle input { accent-color: var(--accent); }
 
 .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .preset {
@@ -501,6 +618,10 @@ defineExpose({ reuse })
 .preset-name { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .preset-meta { font-size: 11.5px; color: var(--muted); }
 .groups { margin-bottom: 8px; }
+.strength { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.strength .section-label { margin: 0; white-space: nowrap; }
+.strength input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); }
+.strength-value { font-size: 12px; color: var(--text-2); min-width: 32px; text-align: right; }
 .groups .preset-name { font-size: 13.5px; font-weight: 600; }
 .loras { display: flex; flex-direction: column; gap: 6px; }
 .lora {

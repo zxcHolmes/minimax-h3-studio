@@ -2,8 +2,8 @@
 """Download every checkpoint the server uses into a ComfyUI models folder.
 
 The file list comes from server/h3_engine.py (base DiTs, text encoder, VAEs and
-every entry in LORAS, including FastH3 bases), so adding a LoRA there is enough
-for it to be prepared.
+every entry in LORAS, including FastH3 bases, plus the MOSS-Image picture model),
+so adding a LoRA there is enough for it to be prepared.
 Standard library only: run it with any Python 3.9+, no ComfyUI env needed.
 
     python scripts/prepare_models.py --comfyui /path/to/ComfyUI
@@ -25,11 +25,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
-from h3_engine import AUDIO_VAE, CLIP, LORAS, UNETS, VIDEO_VAE  # noqa: E402
+from h3_engine import (  # noqa: E402
+    AUDIO_VAE, CLIP, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, UNETS, VIDEO_VAE,
+)
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image")
 
 
 def manifest():
@@ -48,6 +50,11 @@ def manifest():
         if lora["file"]:
             group = "larryvrh" if lora["loader"] == "larryvrh" else "lightx2v"
             items.append((group, lora["source"], lora["file"], "loras", lora["file"]))
+    items += [
+        ("image", MOSS_REPO, f"diffusion_models/{MOSS_UNET}", "diffusion_models", MOSS_UNET),
+        ("image", MOSS_REPO, f"text_encoders/{MOSS_CLIP}", "text_encoders", MOSS_CLIP),
+        ("image", MOSS_REPO, f"vae/{MOSS_VAE}", "vae", MOSS_VAE),
+    ]
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
     families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}
     return [(g, repo, path, sub, name, families.get(name)) for g, repo, path, sub, name in items]
