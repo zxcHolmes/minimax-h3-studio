@@ -52,7 +52,6 @@ const aspect = ref(saved.aspect || '16:9')
 // Picture mode keeps its own prompt and aspect so switching tabs leaves the video form intact.
 const picPrompt = ref(saved.picPrompt || '')
 const picAspect = ref(saved.picAspect || '1:1')
-const enhance = ref(saved.enhance ?? true)
 const duration = ref(saved.duration || 5)
 const seed = ref('')
 const imageFile = ref(null)
@@ -62,12 +61,12 @@ const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
 
-watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect, enhance], () => {
+watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect], () => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       mode: mode.value, rawMode: rawMode.value, sections: sections.value, raw: raw.value,
       resolution: resolution.value, group: group.value, lora: lora.value, strength: strength.value, aspect: aspect.value, duration: duration.value,
-      picPrompt: picPrompt.value, picAspect: picAspect.value, enhance: enhance.value,
+      picPrompt: picPrompt.value, picAspect: picAspect.value,
     }))
   } catch { /* storage unavailable */ }
 }, { deep: true })
@@ -207,10 +206,8 @@ const estimate = computed(() => {
 
 const isPicture = computed(() => mode.value === 't2i')
 const pictureSize = computed(() => props.picture?.sizes?.[picAspect.value])
-// Measured on the RTX 4090: 25 steps at about one megapixel, plus the Qwen3.5 caption when expanding.
-const PICTURE_SECONDS = 16
-const ENHANCE_SECONDS = 45
-const pictureEstimate = computed(() => PICTURE_SECONDS + (enhance.value ? ENHANCE_SECONDS : 0))
+// Measured on the RTX 4090: 25 steps at about one megapixel.
+const pictureEstimate = 16
 
 const canSubmit = computed(() => props.ready && !submitting.value && (isPicture.value ? !!picPrompt.value.trim() : hasContent.value && (
   mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length))))
@@ -238,7 +235,6 @@ async function submit() {
       form.append('kind', 'image')
       form.append('prompt', picPrompt.value)
       form.append('aspect_ratio', picAspect.value)
-      form.append('enhance', enhance.value ? '1' : '0')
       if (seed.value.trim()) form.append('seed', seed.value.trim())
       emit('created', await api.create(form))
       return
@@ -268,7 +264,6 @@ function reuse(job) {
   if (job.mode === 't2i') {
     mode.value = 't2i'
     picPrompt.value = job.prompt
-    enhance.value = !!job.enhance
     seed.value = String(job.seed)
     const match = Object.entries(props.picture?.sizes || {}).find(([, s]) => s[0] === job.width && s[1] === job.height)
     if (match) picAspect.value = match[0]
@@ -350,13 +345,9 @@ defineExpose({ reuse, useAsRef, useAsFrame })
           class="textarea"
           rows="7"
           spellcheck="false"
-          placeholder="一只红色鬃毛的小狮子，3D 动画电影风格，全身正面站在草原上，纯净背景"
+          placeholder="3D animated film style, a lion cub with a red mane, full body, front view, plain white background"
         />
-        <label class="toggle">
-          <input v-model="enhance" type="checkbox" />
-          <span>Expand prompt</span>
-        </label>
-        <p class="help">Qwen3.5 first rewrites a short request (Chinese is fine) into a detailed English caption.</p>
+        <p class="help">Describe subject, style, framing and background; a plain background works best for reference images.</p>
       </div>
 
       <div class="field">
@@ -604,8 +595,6 @@ defineExpose({ reuse, useAsRef, useAsFrame })
 .section-label { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; }
 .tag { font-size: 10.5px; font-weight: 400; color: var(--muted); }
 .raw { font-size: 12.5px; }
-.toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.toggle input { accent-color: var(--accent); }
 
 .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .preset {

@@ -6,13 +6,13 @@ import { PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhStop
 const props = defineProps({ job: Object, now: Number })
 const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame'])
 
-const STAGES = { loading: 'Loading model', enhancing: 'Expanding the prompt', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
+const STAGES = { loading: 'Loading model', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
 const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
-// Pictures: the prompt expansion takes about three times as long as sampling; decoding a single image is instant.
-const PICTURE_SPANS = { loading: [0, 0], enhancing: [0, 0.7], encoding: [0.7, 0.72], sampling: [0.72, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
+// Pictures: decoding a single image is instant, so sampling gets nearly all of the bar.
+const PICTURE_SPANS = { loading: [0, 0], encoding: [0, 0.1], sampling: [0.1, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
 const isPicture = computed(() => props.job.mode === 't2i')
 const overall = computed(() => {
   const span = (isPicture.value ? PICTURE_SPANS : SPANS)[props.job.stage]
@@ -90,11 +90,6 @@ onBeforeUnmount(() => observer?.disconnect())
           {{ expanded ? 'Show less' : 'Show more' }}
         </button>
       </div>
-
-      <details v-if="job.result?.prompt_used && job.result.prompt_used !== job.prompt" class="expanded">
-        <summary>Expanded prompt</summary>
-        <p>{{ job.result.prompt_used }}</p>
-      </details>
 
       <dl class="specs mono">
         <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
@@ -174,8 +169,6 @@ onBeforeUnmount(() => observer?.disconnect())
   font: inherit; font-size: 12px; color: var(--accent);
 }
 .more:hover { text-decoration: underline; }
-.expanded summary { cursor: pointer; color: var(--accent); font-size: 12px; }
-.expanded p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-2); max-height: 200px; overflow: auto; }
 .specs { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 4px 18px; margin: 0; }
 .specs div { display: flex; flex-direction: column; }
 .specs dt { font-size: 10.5px; color: var(--muted); font-family: var(--font); }

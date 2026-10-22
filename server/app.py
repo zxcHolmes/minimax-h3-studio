@@ -93,11 +93,11 @@ class Worker(threading.Thread):
                 picture = f"{job_id}.png"
                 result = self.engine.generate_image(
                     prompt=job["prompt"], width=job["width"], height=job["height"], seed=job["seed"],
-                    enhance=bool(job["enhance"]), image_path=PICTURES / picture, thumb_path=THUMBS / thumb,
+                    image_path=PICTURES / picture, thumb_path=THUMBS / thumb,
                     on_progress=on_progress)
                 self.store.update(job_id, status="done", stage="done", progress=1.0, picture=picture, thumb=thumb,
                                   result=result, finished_at=time.time())
-                log.info("job %s done %s", job_id, {k: v for k, v in result.items() if k != "prompt_used"})
+                log.info("job %s done %s", job_id, result)
                 return
             result = self.engine.generate(
                 lora=job["lora"], prompt=job["prompt"], width=job["width"], height=job["height"],
@@ -222,8 +222,7 @@ async def create_job(request):
         if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image")):
             return bad_request("picture jobs take no input images")
         width, height = image_size(ASPECT_RATIOS[aspect])
-        job = store.create(mode="t2i", prompt=prompt, width=width, height=height, seed=seed,
-                           enhance=int(form.get("enhance", "1") in ("1", "true", "on")), refs=[])
+        job = store.create(mode="t2i", prompt=prompt, width=width, height=height, seed=seed, refs=[])
         if worker.state == "ready":
             worker.queue.put(job["id"])
         return web.json_response(job_view(job, queue_positions(store)), status=201)

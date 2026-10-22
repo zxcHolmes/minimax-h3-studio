@@ -114,7 +114,7 @@ Models come in two groups. **MiniMax-H3 + LoRA** runs the base model of the mode
 
 OmniRef at 768p does not show the green banded glow of the ref2v LoRAs. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
-**Pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). With Expand prompt on (the default), the Qwen3.5 text encoder first rewrites the request into a detailed English caption using the template's system prompt; the job card shows the expanded text. A picture takes about 16 s on a 4090 (13 s of sampling); Expand prompt adds about 45 s, because the w4a8 text encoder generates slowly on cu128; the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. Editing pictures is not supported.
+**Pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). Write the prompt as a detailed English caption; the template's LLM prompt expansion is not used (it took ~45 s and made results worse), since the agent or person writing prompts already does that. A picture takes about 16 s on a 4090 (13 s of sampling); the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. Editing pictures is not supported.
 
 To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
@@ -150,7 +150,7 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 
 `POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`.
 
-A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `seed` (optional) and `enhance` (`1` / `0`, default `1`). The finished job has `picture_url`; `result.prompt_used` holds the prompt after expansion.
+A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `seed` (optional). The finished job has `picture_url`.
 
 ```bash
 curl -F resolution=544p -F duration=5 -F aspect_ratio=16:9 \

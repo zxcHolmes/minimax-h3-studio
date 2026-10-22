@@ -117,7 +117,6 @@ IMAGE = {"steps": 25, "cfg": 2.5, "sampler": "er_sde", "scheduler": "simple",
          "negative": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"}
 IMAGE_AREA = 1024 * 1024
 # The template's prompt expansion: Qwen3.5 rewrites a short (often Chinese) request into an English caption.
-MOSS_SYSTEM_PROMPT = (Path(__file__).resolve().parent / "moss_prompt_system.txt").read_text()
 
 # Keyframe tags the I2VA prompts in the repo and the ComfyUI docs open with.
 I2V_PREFIX = ("For the target video, at 0.00 seconds into the target video, "
@@ -400,11 +399,10 @@ class H3Engine:
             self._moss = (model, clip, vae)
         return self._moss
 
-    def generate_image(self, *, prompt, width, height, seed, enhance, image_path, thumb_path, on_progress):
-        """Render one picture with MOSS-Image; returns the result record, including the prompt it used."""
+    def generate_image(self, *, prompt, width, height, seed, image_path, thumb_path, on_progress):
+        """Render one picture with MOSS-Image; returns the result record."""
         import torch
         from comfy_extras.nodes_flux import EmptyFlux2LatentImage
-        from comfy_extras.nodes_textgen import TextGenerate
 
         self._cancel = False
         self.mm.interrupt_current_processing(False)
@@ -426,18 +424,8 @@ class H3Engine:
                 if self._moss is None:
                     stage("loading")
                 model, clip, vae = self._moss_models()
-                used = prompt
-                if enhance:
-                    stage("enhancing")
-                    sampling = {"sampling_mode": "on", "temperature": 0.7, "top_k": 64, "top_p": 0.95,
-                                "min_p": 0.05, "repetition_penalty": 1.0, "seed": seed, "presence_penalty": 0.0}
-                    used = TextGenerate.execute(clip=clip, prompt=prompt, max_length=4096, sampling_mode=sampling,
-                                                thinking=False, use_default_template=True, mtp="auto",
-                                                system_prompt=MOSS_SYSTEM_PROMPT)[0].strip() or prompt
-                    self._check()
-
                 stage("encoding")
-                positive = self.nodes.CLIPTextEncode().encode(clip, used)[0]
+                positive = self.nodes.CLIPTextEncode().encode(clip, prompt)[0]
                 negative = self.nodes.CLIPTextEncode().encode(clip, IMAGE["negative"])[0]
                 latent = EmptyFlux2LatentImage.execute(width=width, height=height, batch_size=1)[0]
                 self._check()
@@ -464,7 +452,7 @@ class H3Engine:
         names = list(timings)
         durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
                      for i, n in enumerate(names)}
-        return {"steps": IMAGE["steps"], "timings": durations, "models": image_model_info(), "prompt_used": used}
+        return {"steps": IMAGE["steps"], "timings": durations, "models": image_model_info()}
 
     @staticmethod
     def _save_picture(frame, path):
