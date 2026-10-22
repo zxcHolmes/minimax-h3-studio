@@ -90,6 +90,7 @@ Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo)
 - `web/src/components/JobCard.vue`: job card with progress, video, picture or audio player (with lyrics), reuse button, and Reference / Frame buttons on pictures; the prompt is clamped to three lines with a Show more toggle.
 - `doc/animated-short-workflow.md`: the agent workflow for making an animated series through the API (character bible, casting clips as references, storyboards, QC, ffmpeg assembly). Follow it when asked to make a multi-shot or multi-episode video.
 - `web/src/style.css`: design tokens, with light and dark sets.
+- `doc/screenshots/`: README screenshots (WebP, 1440×1000 viewport, taken with Playwright against the deployed server). Retake them when the UI changes visibly; fill the form with real content rather than leaving it empty. Light theme only. The user wants the red panda / zebra material, not the Li Bai (将进酒) jobs, in these screenshots; the overview hides reference-mode cards with a script before the shot.
 
 ## Deployment
 

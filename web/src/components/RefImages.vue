@@ -69,7 +69,8 @@ function remove(id) {
 
 <style scoped>
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-.refs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* minmax(0, 1fr): a plain 1fr column grows to a wide image's intrinsic width and skews the grid. */
+.refs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ref { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .thumb {
   position: relative; aspect-ratio: 4 / 3; border-radius: var(--r-card); overflow: hidden; background: var(--screen);
@@ -83,7 +84,7 @@ function remove(id) {
 .desc { font-size: 12.5px; padding: 6px 9px; }
 .add {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  aspect-ratio: 4 / 3; border: 1.5px dashed var(--line); border-radius: var(--r-card);
+  aspect-ratio: 4 / 3; align-self: start; border: 1.5px dashed var(--line); border-radius: var(--r-card);
   background: var(--surface-sunk); color: var(--muted); font-size: 12.5px; cursor: pointer;
   transition: border-color .15s, color .15s;
 }
