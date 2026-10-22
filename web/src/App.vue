@@ -82,7 +82,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
   <header class="top">
     <div class="brand">
       <Logo :size="24" :live="!!health?.running" />
-      <span>H3 Turbo Studio</span>
+      <span>MiniMax-H3 Studio</span>
     </div>
     <span class="status" :class="status.tone" role="status"><i v-if="status.tone" />{{ status.text }}</span>
   </header>
