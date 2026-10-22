@@ -225,12 +225,12 @@ const ticks = computed(() => {
   return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i)
 })
 
-// Measured on the RTX 4090 (int8 bases, triton + sage): sampling seconds per step per second of
+// Measured on the RTX 4090 (int8 bases, kitchen CUDA + triton backends, sage): sampling seconds per step per second of
 // video, plus encode/decode/save. Switching base model costs well under a second.
 // FastH3 runs with sparse attention (VSA), which makes its steps cheaper.
 const STEP_COST = {
-  h3: { fl2va: { '544p': 1.1, '768p': 3.3 }, ref2va: { '544p': 1.5, '768p': 4 } },
-  fasth3: { fl2va: { '544p': 1.05, '768p': 2.25 }, ref2va: { '544p': 1.25, '768p': 2.75 } },
+  h3: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 0.95, '768p': 2.3 } },
+  fasth3: { fl2va: { '544p': 0.65, '768p': 1.3 }, ref2va: { '544p': 0.7, '768p': 1.2 } },
 }
 const OVERHEAD = { '544p': 12, '768p': 20 }
 const estimate = computed(() => {

@@ -12,7 +12,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 - Output is pixel-identical to the official ComfyUI example workflows with the same settings.
 - One script deploys the server and UI to a GPU machine over SSH; another downloads every checkpoint.
 
-On an RTX 4090 a 5-second clip with sound takes about 40–60 s at 544p and 80–100 s at 768p.
+On an RTX 4090 a 5-second clip with sound takes about 30–45 s at 544p and 65–70 s at 768p.
 
 ## Requirements
 
@@ -105,20 +105,20 @@ Models come in two groups. **MiniMax-H3 + LoRA** runs the base model of the mode
 
 | LoRA | Mode | Steps | Resolutions | 5 s clip on a 4090 |
 |---|---|---|---|---|
-| lightx2v 8-step v1.0 | text / image | 8 | 544p | ~60 s |
-| lightx2v 4-step v1.3 | text / image | 4 | 768p | ~80 s |
-| larryvrh v4 | text / image | 4 | 544p, 768p | ~40 s / ~82 s |
-| lightx2v ref2v v0.1 | reference | 4 | 544p, 768p | ~45 s / ~100 s |
-| lightx2v ref2v v1.0 | reference | 4 | 768p | ~100 s |
+| lightx2v 8-step v1.0 | text / image | 8 | 544p | ~45 s |
+| lightx2v 4-step v1.3 | text / image | 4 | 768p | ~64 s |
+| larryvrh v4 | text / image | 4 | 544p, 768p | ~31 s / ~67 s |
+| lightx2v ref2v v0.1 | reference | 4 | 544p, 768p | ~32 s / ~66 s |
+| lightx2v ref2v v1.0 | reference | 4 | 768p | ~65 s |
 
 **FastVideo FastH3** runs FastVideo's distilled 8-step checkpoints, which replace the base model and take no LoRA. They use the settings of the ComfyUI FastH3 templates, including comfy_kitchen attention with Video Sparse Attention (keep 10%):
 
 | Model | Mode | Sampler | Shift | 5 s clip on a 4090 |
 |---|---|---|---|---|
-| FastH3 V2 8-step | text / image | res_multistep | 10/3 | ~55 s (544p) / ~110 s (768p) |
-| FastH3 OmniRef 8-step | reference | euler | 12/3 | ~62 s (544p) / ~130 s (768p) |
+| FastH3 V2 8-step | text / image | res_multistep | 10/3 | ~39 s (544p) / ~71 s (768p) |
+| FastH3 OmniRef 8-step | reference | euler | 12/3 | ~41 s (544p) / ~67 s (768p) |
 
-OmniRef at 768p does not show the green banded glow of the ref2v LoRAs. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
+OmniRef at 768p does not show the green banded glow of the ref2v LoRAs. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
 **Pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). Write the prompt as a detailed English caption; the template's LLM prompt expansion is not used (it took ~45 s and made results worse), since the agent or person writing prompts already does that. A picture takes about 16 s on a 4090 (13 s of sampling); the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. Editing pictures is not supported.
 

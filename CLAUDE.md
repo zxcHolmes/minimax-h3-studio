@@ -15,7 +15,7 @@ Deployment settings come from environment variables. Locally they live in `.env`
 ## Environment
 
 - The GPU machine needs a ComfyUI checkout with MiniMax-H3 support (developed against 0.42). The server and launcher reuse ComfyUI's Python environment (conda or venv).
-- The timings in the tables were measured on an RTX 4090 24GB with 125GB RAM and torch cu128. On cu128 the comfy-kitchen CUDA ops are unavailable.
+- The timings in the tables were measured on an RTX 4090 24GB with 125GB RAM and torch cu128. comfy_kitchen 0.2.39 is built from source for CUDA 12.8 / sm_89 on the GPU box (the cu13 wheel's CUDA ops do not load there), Stock ComfyUI's `comfy/quant_ops.py` calls `ck.registry.disable("cuda")` whenever torch is older than cu130, which left that build unused. The GPU box's ComfyUI carries a local patch (original in `comfy/quant_ops.py.orig`) that only disables the CUDA backend when its ops fail to load, so the server now runs with both the CUDA and the triton backends (startup log: `backend cuda: ... 'disabled': False`). Measured: a 12.3 s 544p larryvrh shot went from 108 s to 90 s. Re-apply the patch after updating ComfyUI (`git pull` may conflict with it). The `int8_tensorwise` + convrot checkpoints run their linear layers through `comfy_kitchen.int8_linear` (row-wise dynamic activation quantization + int8 matmul); `--enable-triton-backend` is still needed, because without kitchen's accelerated backends int8 matmul falls back to eager (the flag alone gave ~2× before the patch).
 - When killing processes over ssh, use the bracket form `pkill -f "[m]ain.py ..."`, otherwise the pattern matches and kills the ssh session itself.
 
 ## Models and LoRAs (measured findings)
@@ -33,11 +33,11 @@ Resolution (`RESOLUTIONS`: 544p = 960×544 pixel area, 768p = 1344×768 pixel ar
 
 | LoRA key | Base | File | Steps | Shift | Resolutions | 5 s clip |
 |---|---|---|---|---|---|---|
-| `lightx2v-8step-v1.0` (544p default) | fl2va | `fl2v_turbo_8step_v1.0` | 8 | 12/3 | 544p | ~60s |
-| `lightx2v-4step-v1.3` (768p default) | fl2va | `fl2v_turbo_4step_v1.3_768p` | 4 | 6/3 | 768p | ~80s |
-| `larryvrh-v4` | fl2va | `minimax_h3_turbo_v4_step600_ema` | 4 | 12/3 | 544p / 768p | ~40s / ~82s |
-| `lightx2v-ref-v0.1` (reference 544p default) | ref2va | `ref2v_turbo_4step_v0.1` | 4 | 12/3 | 544p / 768p | ~45s / ~100s |
-| `lightx2v-ref-v1.0` (reference 768p default) | ref2va | `ref2v_turbo_4step_v1.0_768p` | 4 | 12/3 | 768p | ~100s |
+| `lightx2v-8step-v1.0` (544p default) | fl2va | `fl2v_turbo_8step_v1.0` | 8 | 12/3 | 544p | ~45s |
+| `lightx2v-4step-v1.3` (768p default) | fl2va | `fl2v_turbo_4step_v1.3_768p` | 4 | 6/3 | 768p | ~64s |
+| `larryvrh-v4` | fl2va | `minimax_h3_turbo_v4_step600_ema` | 4 | 12/3 | 544p / 768p | ~31s / ~67s |
+| `lightx2v-ref-v0.1` (reference 544p default) | ref2va | `ref2v_turbo_4step_v0.1` | 4 | 12/3 | 544p / 768p | ~32s / ~66s |
+| `lightx2v-ref-v1.0` (reference 768p default) | ref2va | `ref2v_turbo_4step_v1.0_768p` | 4 | 12/3 | 768p | ~65s |
 
 FastH3 (FastVideo's distilled 8-step bases) is a second model group (`GROUPS` in `h3_engine.py`). Its `LORAS` entries have `group: "fasth3"`, their own `unet` (+ `unet_source`), `file: None`, `loader: "none"`, a `sampler` and `vsa` settings:
 
@@ -46,7 +46,7 @@ FastH3 (FastVideo's distilled 8-step bases) is a second model group (`GROUPS` in
 | `fasth3-v2` | fl2va | `fastvideo_fasth3_8step_v2_pruned_int8_convrot` | res_multistep | 10/3 | 10 / 0.2 |
 | `fasth3-omniref` | ref2va | `fasth3_omniref_8step_pruned_int8_convrot` | euler | 12/3 | 10 / 0 |
 
-VSA needs comfy kitchen attention; on the GPU box comfy_kitchen 0.2.39 was rebuilt for CUDA 12.8 (sm_89), because the cu13 wheel crashes on driver 570. FastH3 is not faster than the LoRAs on the 4090; OmniRef's gain is 768p reference shots without the green glow.
+VSA needs comfy kitchen attention; on the GPU box comfy_kitchen 0.2.39 was rebuilt for CUDA 12.8 (sm_89), because the cu13 wheel crashes on driver 570. With the kitchen CUDA backend enabled (see Environment) a 5 s FastH3 clip takes ~39 s / ~71 s (V2, 544p / 768p) and ~41 s / ~67 s (OmniRef): faster than the 8-step LoRA, slower than the 4-step ones at 544p, about the same at 768p. OmniRef's gain is 768p reference shots without the green glow. The 5 s timings in these tables were measured on 2026-10-22 after the kitchen patch (before it they were 17–48% slower).
 
 Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo): the frontend picks it up through `/api/presets` and `prepare_models.py` downloads it. The base models, text encoder and VAEs all come from `Comfy-Org/MiniMax-H3`.
 
