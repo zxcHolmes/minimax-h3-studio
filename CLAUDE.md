@@ -75,7 +75,8 @@ Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo)
 - `web/src/components/GenerateForm.vue`: generation form. The prompt is edited in picture / sound / music sections, or as the raw prompt; also resolution, LoRA choice (filtered by mode and resolution, recommended one marked), aspect ratio, duration ruler, seed and reuse.
 - `web/src/components/RefImages.vue`: reference image list, each image with a subject description. Image N is `<Subject N>` / `<Picture N>`.
 - `web/src/components/ImageDrop.vue`: drag-and-drop upload for the first / last frame.
-- `web/src/components/JobCard.vue`: job card with progress, video and reuse button.
+- `web/src/components/JobCard.vue`: job card with progress, video and reuse button; the prompt is clamped to three lines with a Show more toggle.
+- `doc/animated-short-workflow.md`: the agent workflow for making an animated series through the API (character bible, casting clips as references, storyboards, QC, ffmpeg assembly). Follow it when asked to make a multi-shot or multi-episode video.
 - `web/src/style.css`: design tokens, with light and dark sets.
 
 ## Deployment

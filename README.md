@@ -85,7 +85,7 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 | Image | fl2va | first frame, optional last frame |
 | Reference | ref2va | 1–6 images, each with a short subject description |
 
-Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text.
+Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text. Job cards show the first lines of the prompt; long prompts expand with Show more.
 
 Available LoRAs (the recommended one is preselected):
 
@@ -150,7 +150,11 @@ python comfy_launcher/run_h3.py --comfyui /path/to/ComfyUI \
   --steps 8 --width 960 --height 544 --duration 5 -- --enable-triton-backend --use-sage-attention
 ```
 
-It also takes `--first-frame`, `--last-frame`, repeated `--ref-image`, `--jobs-json` for batches and `--lora-loader larryvrh`; see `--help`. `comfy_launcher/bench.sh` wraps it with GPU memory logging.
+It also takes `--first-frame`, `--last-frame`, repeated `--ref-image`, `--jobs-json` for batches and `--lora-loader larryvrh`. For experiments: `--attention-backend` (`pytorch` or comfy_kitchen `kitchen` attention), `--vsa` / `--vsa-start` (Video Sparse Attention for FastH3 checkpoints) and `--save-frames` (also writes the decoded frames losslessly as `.npy`). See `--help`. `comfy_launcher/bench.sh` wraps it with GPU memory logging.
+
+## Making an animated series
+
+[doc/animated-short-workflow.md](doc/animated-short-workflow.md) describes how an agent such as Claude Code directs a multi-episode animated short through the HTTP API: a character bible with fixed looks and voices, casting clips that provide reference images, storyboards, reference-mode shots that keep characters consistent, QC, and assembling each episode with ffmpeg.
 
 ## Development
 

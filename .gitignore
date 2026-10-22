@@ -19,8 +19,6 @@ comfy_launcher/*.log
 comfy_launcher/*.vram
 comfy_launcher/gpu.lock
 
-# Local notes
-doc/
 
 # Session handoff notes
 HANDOFF.md
