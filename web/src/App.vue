@@ -16,6 +16,7 @@ const durationRange = ref([2, 15])
 const maxRefs = ref(6)
 const strengthRange = ref([0, 2])
 const picture = ref(null)
+const music = ref(null)
 const PAGE_SIZE = 24
 const jobs = ref(null)
 const total = ref(0)
@@ -100,6 +101,11 @@ async function useRef(job) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+async function useAudio(job) {
+  await form.value?.useAsAudio(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 async function useFrame(job) {
   await form.value?.useAsFrame(job)
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -117,6 +123,7 @@ onMounted(async () => {
     maxRefs.value = p.max_refs || 6
     strengthRange.value = p.lora_strength_range || [0, 2]
     picture.value = p.image || null
+    music.value = p.music || null
   } catch { /* refresh() reports offline */ }
   refresh()
   clock = setInterval(() => { now.value = Date.now() }, 1000)
@@ -146,6 +153,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
         :max-refs="maxRefs"
         :strength-range="strengthRange"
         :picture="picture"
+        :music="music"
         :ready="ready"
         @created="created"
       />
@@ -155,7 +163,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </details>
     </aside>
 
-    <section ref="dailies" class="dailies" aria-label="Generated videos and pictures">
+    <section ref="dailies" class="dailies" aria-label="Generated videos, pictures and music">
       <h1 class="title">Dailies<span v-if="total" class="count mono">{{ total }}</span></h1>
 
       <div v-if="jobs === null" class="grid">
@@ -163,7 +171,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </div>
       <div v-else-if="!jobs.length" class="empty">
         <PhFilmSlate :size="34" weight="duotone" />
-        <p>Nothing yet. Describe a scene and press Generate; videos and pictures show up here.</p>
+        <p>Nothing yet. Describe a scene and press Generate; videos, pictures and music show up here.</p>
       </div>
       <div v-else class="grid">
         <JobCard
@@ -176,6 +184,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
           @reuse="reuse"
           @use-ref="useRef"
           @use-frame="useFrame"
+          @use-audio="useAudio"
         />
       </div>
 

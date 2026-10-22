@@ -2,7 +2,7 @@
 
 Environment:
     H3_COMFYUI     ComfyUI checkout            (required)
-    H3_DATA        jobs.db, videos, pictures, uploads (default <repo>/data)
+    H3_DATA        jobs.db, videos, pictures, music, uploads (default <repo>/data)
     H3_WEB_DIST    built frontend              (default <repo>/web_dist)
     H3_HOST/H3_PORT                            (default 0.0.0.0:8190)
     H3_COMFY_ARGS  extra ComfyUI CLI flags     (default triton + sage attention)
@@ -22,8 +22,9 @@ from pathlib import Path
 from aiohttp import web
 
 from h3_engine import (
-    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, RESOLUTIONS,
-    Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info, with_keyframe_prefix,
+    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
+    RESOLUTIONS, Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info, music_model_info,
+    with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
 
@@ -35,7 +36,8 @@ HOST = os.environ.get("H3_HOST", "0.0.0.0")
 PORT = int(os.environ.get("H3_PORT", "8190"))
 COMFY_ARGS = shlex.split(os.environ.get("H3_COMFY_ARGS", "--enable-triton-backend --use-sage-attention"))
 
-VIDEOS, PICTURES, THUMBS, UPLOADS = DATA / "videos", DATA / "pictures", DATA / "thumbs", DATA / "uploads"
+VIDEOS, PICTURES, MUSIC_DIR, THUMBS, UPLOADS = (DATA / "videos", DATA / "pictures", DATA / "music",
+                                                DATA / "thumbs", DATA / "uploads")
 MAX_SEED = 2 ** 48
 MAX_PROMPT = 20000
 DURATION_RANGE = (2.0, 15.0)
@@ -99,12 +101,23 @@ class Worker(threading.Thread):
                                   result=result, finished_at=time.time())
                 log.info("job %s done %s", job_id, result)
                 return
+            if job["mode"] == "t2m":
+                audio = f"{job_id}.mp3"
+                result = self.engine.generate_music(
+                    caption=job["prompt"], lyrics=job["lyrics"] or "", duration=job["duration"], seed=job["seed"],
+                    audio_path=MUSIC_DIR / audio, on_progress=on_progress)
+                self.store.update(job_id, status="done", stage="done", progress=1.0, audio=audio,
+                                  result=result, finished_at=time.time())
+                log.info("job %s done %s", job_id, result)
+                return
             result = self.engine.generate(
                 lora=job["lora"], prompt=job["prompt"], width=job["width"], height=job["height"],
                 duration=job["duration"], seed=job["seed"], lora_strength=job_strength(job),
                 image_path=UPLOADS / job["image"] if job["image"] else None,
                 last_image_path=UPLOADS / job["last_image"] if job["last_image"] else None,
                 ref_paths=[UPLOADS / name for name in job["refs"]],
+                audio_path=UPLOADS / job["guide_audio"] if job["guide_audio"] else None,
+                audio_start=job["audio_start"] or 0.0,
                 video_path=VIDEOS / video, thumb_path=THUMBS / thumb, on_progress=on_progress)
             self.store.update(job_id, status="done", stage="done", progress=1.0, video=video, thumb=thumb,
                               result=result, finished_at=time.time())
@@ -123,14 +136,16 @@ class Worker(threading.Thread):
 def job_view(job, positions):
     view = dict(job)
     view["queue_position"] = positions.get(job["id"])
-    for key, folder in (("video", "videos"), ("picture", "pictures"), ("thumb", "thumbs"), ("image", "uploads"),
-                        ("last_image", "uploads")):
+    for key, folder in (("video", "videos"), ("picture", "pictures"), ("audio", "music"), ("thumb", "thumbs"),
+                        ("image", "uploads"), ("last_image", "uploads"), ("guide_audio", "uploads")):
         view[f"{key}_url"] = f"/files/{folder}/{job[key]}" if job[key] else None
     view["ref_urls"] = [f"/files/uploads/{name}" for name in job["refs"]]
     # Finished jobs record what they ran on; others show what their LoRA will use.
     stored = (job["result"] or {}).get("models")
     if job["mode"] == "t2i":
         view["models"] = stored or image_model_info()
+    elif job["mode"] == "t2m":
+        view["models"] = stored or music_model_info()
     else:
         view["models"] = stored or (model_info(job["lora"], job_strength(job))
                                     if job["lora"] in LORAS else None)
@@ -168,6 +183,7 @@ async def presets(request):
         "max_refs": MAX_REFS,
         "lora_strength_range": LORA_STRENGTH_RANGE,
         "image": {"sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()}, "models": image_model_info()},
+        "music": {"duration_range": MUSIC_DURATION_RANGE, "default_duration": 120, "models": music_model_info()},
     })
 
 
@@ -206,21 +222,35 @@ async def create_job(request):
     resolution = form.get("resolution") or "768p"
     if resolution not in RESOLUTIONS:
         return bad_request(f"unknown resolution {resolution}")
+    kind = form.get("kind") or "video"
     try:
-        duration = float(form.get("duration") or 5)
+        duration = float(form.get("duration") or (120 if kind == "music" else 5))
     except ValueError:
         return bad_request("duration must be a number")
-    if not DURATION_RANGE[0] <= duration <= DURATION_RANGE[1]:
-        return bad_request(f"duration must be within {DURATION_RANGE}")
+    duration_range = MUSIC_DURATION_RANGE if kind == "music" else DURATION_RANGE
+    if not duration_range[0] <= duration <= duration_range[1]:
+        return bad_request(f"duration must be within {duration_range}")
     raw_seed = (form.get("seed") or "").strip()
     seed = int(raw_seed) % MAX_SEED if raw_seed.lstrip("-").isdigit() else random.randrange(MAX_SEED)
 
-    if form.get("kind") == "image":
+    if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image", "audio")) \
+            and kind in ("image", "music"):
+        return bad_request(f"{kind} jobs take no input images or audio")
+
+    if kind == "music":
+        # The prompt is the caption (style, vocals, arrangement); lyrics carry the [verse]/[chorus] structure.
+        lyrics = (form.get("lyrics") or "").strip()
+        if len(lyrics) > MAX_PROMPT:
+            return bad_request("lyrics are too long")
+        job = store.create(mode="t2m", prompt=prompt, lyrics=lyrics, duration=duration, seed=seed, refs=[])
+        if worker.state == "ready":
+            worker.queue.put(job["id"])
+        return web.json_response(job_view(job, queue_positions(store)), status=201)
+
+    if kind == "image":
         aspect = form.get("aspect_ratio") or "1:1"
         if aspect not in ASPECT_RATIOS:
             return bad_request(f"unknown aspect ratio {aspect}")
-        if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image")):
-            return bad_request("picture jobs take no input images")
         width, height = image_size(ASPECT_RATIOS[aspect])
         job = store.create(mode="t2i", prompt=prompt, width=width, height=height, seed=seed, refs=[])
         if worker.state == "ready":
@@ -249,6 +279,13 @@ async def create_job(request):
     except ValueError as e:
         return bad_request(str(e))
     refs = [r for r in refs if r]
+    try:
+        guide = read_audio(form.get("audio"))
+        audio_start = float(form.get("audio_start") or 0)
+    except ValueError as e:
+        return bad_request(str(e))
+    if guide and not 0 <= audio_start < guide[2] - 0.5:
+        return bad_request(f"audio_start must be within the audio's {guide[2]:.1f} s")
     if last and not first:
         return bad_request("a last frame needs a first frame")
     if refs and (first or last):
@@ -282,6 +319,7 @@ async def create_job(request):
     image_name = save(first) if first else None
     last_name = save(last) if last else None
     ref_names = [save(r) for r in refs]
+    guide_name = save(guide) if guide else None
 
     aspect = form.get("aspect_ratio") or "16:9"
     if aspect == "image" and (first or refs):
@@ -298,10 +336,28 @@ async def create_job(request):
         prompt = with_keyframe_prefix(prompt, duration, last_frame=bool(last_name))
     job = store.create(mode=mode, preset=resolution, lora=lora, lora_strength=lora_strength, prompt=prompt,
                        width=width, height=height, duration=duration, seed=seed, image=image_name,
-                       last_image=last_name, refs=ref_names)
+                       last_image=last_name, refs=ref_names, guide_audio=guide_name,
+                       audio_start=audio_start if guide_name else None)
     if worker.state == "ready":
         worker.queue.put(job["id"])
     return web.json_response(job_view(job, queue_positions(store)), status=201)
+
+
+def read_audio(upload):
+    """(bytes, suffix, seconds) for an uploaded audio file, None when absent, raises ValueError if unreadable."""
+    import av
+    if not isinstance(upload, web.FileField):
+        return None
+    data = upload.file.read()
+    try:
+        with av.open(io.BytesIO(data)) as container:
+            stream = container.streams.audio[0]
+            seconds = float(container.duration / av.time_base) if container.duration else \
+                float(stream.duration * stream.time_base)
+    except Exception:
+        raise ValueError("audio is not a readable audio file")
+    suffix = Path(upload.filename or "").suffix.lower()
+    return data, suffix if suffix in (".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus") else ".mp3", seconds
 
 
 async def cancel_job(request):
@@ -323,8 +379,9 @@ async def delete_job(request):
         raise web.HTTPNotFound()
     if job["status"] in ACTIVE:
         return bad_request("cancel the job before deleting it")
-    for folder, name in ((VIDEOS, job["video"]), (PICTURES, job["picture"]), (THUMBS, job["thumb"]),
-                         (UPLOADS, job["image"]),
+    for folder, name in ((VIDEOS, job["video"]), (PICTURES, job["picture"]), (MUSIC_DIR, job["audio"]),
+                         (THUMBS, job["thumb"]),
+                         (UPLOADS, job["image"]), (UPLOADS, job["guide_audio"]),
                          (UPLOADS, job["last_image"]), *((UPLOADS, n) for n in job["refs"])):
         if name:
             (folder / name).unlink(missing_ok=True)
@@ -342,7 +399,7 @@ async def index(request):
 
 
 def make_app():
-    for folder in (DATA, VIDEOS, PICTURES, THUMBS, UPLOADS):
+    for folder in (DATA, VIDEOS, PICTURES, MUSIC_DIR, THUMBS, UPLOADS):
         folder.mkdir(parents=True, exist_ok=True)
     store = JobStore(DATA / "jobs.db")
     store.backfill_lora(LEGACY_PRESETS)
@@ -360,6 +417,7 @@ def make_app():
     app.router.add_delete("/api/jobs/{id}", delete_job)
     app.router.add_static("/files/videos", VIDEOS)
     app.router.add_static("/files/pictures", PICTURES)
+    app.router.add_static("/files/music", MUSIC_DIR)
     app.router.add_static("/files/thumbs", THUMBS)
     app.router.add_static("/files/uploads", UPLOADS)
     app.router.add_get("/{path:.*}", frontend)

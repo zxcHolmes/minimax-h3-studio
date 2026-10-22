@@ -8,7 +8,7 @@ import RefImages from './RefImages.vue'
 
 const props = defineProps({
   resolutions: Array, groups: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array,
-  maxRefs: Number, strengthRange: Array, picture: Object,
+  maxRefs: Number, strengthRange: Array, picture: Object, music: Object,
   ready: Boolean,
 })
 const emit = defineEmits(['created'])
@@ -34,7 +34,23 @@ const SECTION_RE = /^\s*integrated_multimodal_description:\s*([\s\S]*?)\n\s*\n\s
 const REF_SECTION_RE = /\n\s*detailed_description:\s*([\s\S]*?)\n\s*\n\s*overall_soundscape:\s*([\s\S]*?)\n\s*\n\s*non_diegetic_music:\s*([\s\S]*?)\s*$/
 const SUBJECT_RE = /^<Subject (\d+)> is ([\s\S]*?), as shown in <Picture \d+>\.$/gm
 const FAMILY = { t2v: 'fl2va', i2v: 'fl2va', r2v: 'ref2va' }
-const MODE_TABS = [['t2v', 'Text'], ['i2v', 'Frames'], ['r2v', 'Reference'], ['t2i', 'Picture']]
+const MUSIC_CAPTION_HINT = `Global Metadata: Lo-fi hip-hop, 78 BPM, D flat major. Laid-back and dreamy, late-night study mood.
+
+Vocal Details: Soft androgynous vocal, hushed half-sung delivery, sitting low in the mix.
+
+Arrangement: Dusty boom-bap drums, warm Rhodes chords, mellow jazzy guitar, vinyl crackle.`
+const MUSIC_LYRICS_HINT = `[Intro]
+Mmm...
+
+[Verse]
+Midnight and the canvas glows
+
+[Chorus]
+Let it render on
+
+[Outro]
+Ooh... goodnight`
+const MODE_TABS = [['t2v', 'Text'], ['i2v', 'Frames'], ['r2v', 'Reference'], ['t2i', 'Picture'], ['t2m', 'Music']]
 
 const STORAGE_KEY = 'h3.form.v2'
 const saved = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {} } catch { return {} } })()
@@ -52,21 +68,39 @@ const aspect = ref(saved.aspect || '16:9')
 // Picture mode keeps its own prompt and aspect so switching tabs leaves the video form intact.
 const picPrompt = ref(saved.picPrompt || '')
 const picAspect = ref(saved.picAspect || '1:1')
+// Music keeps its caption, lyrics and length apart from the video form too.
+const musicCaption = ref(saved.musicCaption || '')
+const musicLyrics = ref(saved.musicLyrics || '')
+const musicDuration = ref(saved.musicDuration || 120)
 const duration = ref(saved.duration || 5)
 const seed = ref('')
 const imageFile = ref(null)
 const lastFile = ref(null)
+// Optional guide audio for video modes: the clip from audioStart is anchored as the shot's soundtrack.
+const audioFile = ref(null)
+const audioStart = ref(0)
+const audioUrl = ref(null)
+watch(audioFile, (f) => {
+  if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
+  audioUrl.value = f ? URL.createObjectURL(f) : null
+})
+function pickAudio(e) {
+  const f = e.target.files?.[0]
+  if (f) { audioFile.value = f; audioStart.value = 0 }
+  e.target.value = ''
+}
 const refs = ref([])
 const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
 
-watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect], () => {
+watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect, musicCaption, musicLyrics, musicDuration], () => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       mode: mode.value, rawMode: rawMode.value, sections: sections.value, raw: raw.value,
       resolution: resolution.value, group: group.value, lora: lora.value, strength: strength.value, aspect: aspect.value, duration: duration.value,
       picPrompt: picPrompt.value, picAspect: picAspect.value,
+      musicCaption: musicCaption.value, musicLyrics: musicLyrics.value, musicDuration: musicDuration.value,
     }))
   } catch { /* storage unavailable */ }
 }, { deep: true })
@@ -209,8 +243,30 @@ const pictureSize = computed(() => props.picture?.sizes?.[picAspect.value])
 // Measured on the RTX 4090: 25 steps at about one megapixel.
 const pictureEstimate = 16
 
-const canSubmit = computed(() => props.ready && !submitting.value && (isPicture.value ? !!picPrompt.value.trim() : hasContent.value && (
-  mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length))))
+const isMusic = computed(() => mode.value === 't2m')
+const musicRange = computed(() => props.music?.duration_range || [10, 300])
+function clock(s) { return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+const musicLength = computed(() => clock(musicDuration.value))
+// Rough length the lyrics need: about 0.6 s per sung Chinese character (or English word), a few seconds
+// per section for breaths and fills, plus intro and outro. The duration is only a cap, so err long.
+const lyricsNeed = computed(() => {
+  const text = musicLyrics.value
+  const sections = (text.match(/\[[^\]]+\]/g) || []).length
+  const sung = text.replace(/\[[^\]]+\]/g, '')
+  const units = (sung.match(/[\u3400-\u9fff]/g) || []).length + (sung.match(/[A-Za-z']+/g) || []).length
+  if (!units) return null
+  const [lo, hi] = musicRange.value
+  return Math.min(hi, Math.max(lo, Math.ceil((units * 0.6 + sections * 4 + 15) / 10) * 10))
+})
+const lyricsTooShort = computed(() => lyricsNeed.value !== null && musicDuration.value < lyricsNeed.value)
+// Measured on the RTX 4090: writing the acoustic tokens dominates and grows with the song length.
+const MUSIC_SECONDS_PER_SECOND = 1.3
+const musicEstimate = computed(() => Math.round(20 + MUSIC_SECONDS_PER_SECOND * musicDuration.value))
+
+const canSubmit = computed(() => props.ready && !submitting.value && (
+  isPicture.value ? !!picPrompt.value.trim()
+    : isMusic.value ? !!musicCaption.value.trim()
+      : hasContent.value && (mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length))))
 
 watch(imageFile, (f) => {
   if (f) aspect.value = 'image'
@@ -239,6 +295,15 @@ async function submit() {
       emit('created', await api.create(form))
       return
     }
+    if (isMusic.value) {
+      form.append('kind', 'music')
+      form.append('prompt', musicCaption.value)
+      form.append('lyrics', musicLyrics.value)
+      form.append('duration', String(musicDuration.value))
+      if (seed.value.trim()) form.append('seed', seed.value.trim())
+      emit('created', await api.create(form))
+      return
+    }
     form.append('prompt', prompt.value)
     form.append('resolution', resolution.value)
     form.append('lora', lora.value)
@@ -251,6 +316,10 @@ async function submit() {
       if (lastFile.value) form.append('last_image', lastFile.value)
     }
     if (mode.value === 'r2v') refs.value.forEach((r) => form.append('ref_image', r.file))
+    if (audioFile.value) {
+      form.append('audio', audioFile.value)
+      form.append('audio_start', String(audioStart.value || 0))
+    }
     emit('created', await api.create(form))
   } catch (e) {
     error.value = e.message
@@ -269,7 +338,19 @@ function reuse(job) {
     if (match) picAspect.value = match[0]
     return
   }
+  if (job.mode === 't2m') {
+    mode.value = 't2m'
+    musicCaption.value = job.prompt
+    musicLyrics.value = job.lyrics || ''
+    musicDuration.value = Math.round(job.duration)
+    seed.value = String(job.seed)
+    return
+  }
   const descs = loadPrompt(job.prompt, job.mode === 'r2v' ? 'r2v' : 'i2v')
+  audioFile.value = null
+  if (job.guide_audio_url) {
+    fileFrom(job.guide_audio_url, job.guide_audio).then((f) => { audioFile.value = f; audioStart.value = job.audio_start || 0 })
+  }
   resolution.value = job.preset
   duration.value = job.duration
   seed.value = String(job.seed)
@@ -319,7 +400,14 @@ async function useAsFrame(job) {
   mode.value = 'i2v'
 }
 
-defineExpose({ reuse, useAsRef, useAsFrame })
+// Send a finished song into the video form as its guide audio.
+async function useAsAudio(job) {
+  audioFile.value = await fileFrom(job.audio_url, `${job.id}.mp3`)
+  audioStart.value = 0
+  if (mode.value === 't2i' || mode.value === 't2m') mode.value = 't2v'
+}
+
+defineExpose({ reuse, useAsRef, useAsFrame, useAsAudio })
 </script>
 
 <template>
@@ -366,6 +454,59 @@ defineExpose({ reuse, useAsRef, useAsFrame })
         <dl v-if="picture" class="models">
           <div><dt>Model</dt><dd class="mono" :title="picture.models.unet">{{ shortModel(picture.models.unet) }}</dd></div>
           <div><dt>Sampler</dt><dd class="mono">{{ picture.models.sampler }} · {{ picture.models.steps }} steps · cfg {{ picture.models.cfg }}</dd></div>
+        </dl>
+      </div>
+    </template>
+
+    <template v-else-if="isMusic">
+      <div class="field">
+        <label for="music-caption" class="field-label">Caption<span class="aside">Style, mood, vocals, arrangement</span></label>
+        <textarea
+          id="music-caption"
+          v-model="musicCaption"
+          class="textarea"
+          rows="8"
+          spellcheck="false"
+          :placeholder="MUSIC_CAPTION_HINT"
+        />
+        <p class="help">Write three parts: Global Metadata (genre, BPM, key, mood), Vocal Details and Arrangement. The more specific, the closer the result.</p>
+      </div>
+
+      <div class="field">
+        <label for="music-lyrics" class="field-label">Lyrics<span class="aside">Empty for an instrumental</span></label>
+        <textarea
+          id="music-lyrics"
+          v-model="musicLyrics"
+          class="textarea mono raw"
+          rows="10"
+          spellcheck="false"
+          :placeholder="MUSIC_LYRICS_HINT"
+        />
+        <p class="help">Section tags such as [Intro], [Verse], [Chorus], [Bridge], [Instrumental] and [Outro] set the song structure.</p>
+      </div>
+
+      <div class="field">
+        <label for="music-duration" class="field-label">
+          <span>Maximum length</span>
+          <span class="aside mono">{{ musicLength }}</span>
+        </label>
+        <input
+          id="music-duration"
+          v-model.number="musicDuration"
+          class="range"
+          type="range"
+          :min="musicRange[0]"
+          :max="musicRange[1]"
+          step="10"
+        />
+        <p v-if="lyricsTooShort" class="help warn">
+          The lyrics need about {{ clock(lyricsNeed) }}; at {{ musicLength }} the song will be cut off.
+          <button type="button" class="btn quiet small" @click="musicDuration = lyricsNeed">Use {{ clock(lyricsNeed) }}</button>
+        </p>
+        <p v-else class="help">The model may end the song earlier.<template v-if="lyricsNeed"> The lyrics need about {{ clock(lyricsNeed) }}.</template></p>
+        <dl v-if="music" class="models">
+          <div><dt>Model</dt><dd class="mono" :title="music.models.unet">{{ shortModel(music.models.unet) }}</dd></div>
+          <div><dt>Sampler</dt><dd class="mono">{{ music.models.sampler }} · {{ music.models.steps }} steps · cfg {{ music.models.cfg }}</dd></div>
         </dl>
       </div>
     </template>
@@ -427,6 +568,27 @@ defineExpose({ reuse, useAsRef, useAsFrame })
       </div>
       <p v-if="mode === 'i2v'" class="help">The first frame is &lt;Picture 1&gt; and the last frame &lt;Picture 2&gt;; the server adds these references if the prompt lacks them.</p>
       <p v-if="mode === 'r2v' && !rawMode" class="help">Subject definitions, summary and retention notes are generated from the images; open the raw prompt to see the full text.</p>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Guide audio<span class="aside">Optional; the shot is generated to match it</span></span>
+      <div v-if="audioFile" class="guide">
+        <audio :src="audioUrl" controls preload="metadata" />
+        <div class="guide-row">
+          <span class="mono guide-name" :title="audioFile.name">{{ audioFile.name }}</span>
+          <label class="guide-start">
+            Start at
+            <input v-model.number="audioStart" class="input mono" type="number" min="0" step="0.1" />
+            s
+          </label>
+          <button type="button" class="btn quiet small" @click="audioFile = null">Remove</button>
+        </div>
+        <p class="help">The {{ (frames / 24).toFixed(2) }} s from this point become the shot's soundtrack; singing and speech drive the mouths and motion.</p>
+      </div>
+      <label v-else class="btn guide-pick">
+        Choose an audio file
+        <input type="file" accept="audio/*" class="sr-only" @change="pickAudio" />
+      </label>
     </div>
 
     <div class="field">
@@ -558,12 +720,16 @@ defineExpose({ reuse, useAsRef, useAsFrame })
           <span v-if="pictureSize" class="mono">{{ pictureSize[0] }}×{{ pictureSize[1] }}</span>
           <span class="muted">About {{ pictureEstimate }} s</span>
         </template>
+        <template v-else-if="isMusic">
+          <span class="mono">≤ {{ musicLength }}</span>
+          <span class="muted">About {{ musicEstimate }} s</span>
+        </template>
         <template v-else>
           <span v-if="outputSize" class="mono">{{ outputSize[0] }}×{{ outputSize[1] }}</span>
           <span class="muted">About {{ estimate }} s</span>
         </template>
       </span>
-      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? 'Submitting' : isPicture ? 'Generate picture' : 'Generate video' }}</button>
+      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? 'Submitting' : isPicture ? 'Generate picture' : isMusic ? 'Generate music' : 'Generate video' }}</button>
     </div>
     <p v-if="!ready" class="help">The server is still loading models; you can submit once it is ready.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -576,7 +742,7 @@ defineExpose({ reuse, useAsRef, useAsFrame })
 .small { padding: 3px 10px; font-size: 12px; }
 
 .modes {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px;
   background: var(--surface-sunk); border-radius: 999px;
 }
 .modes button {
@@ -644,6 +810,14 @@ defineExpose({ reuse, useAsRef, useAsFrame })
 .chip:disabled { opacity: .4; cursor: not-allowed; }
 
 .timeline { position: relative; padding-top: 2px; }
+.range { width: 100%; margin: 0; accent-color: var(--accent); }
+.guide { display: flex; flex-direction: column; gap: 8px; }
+.guide audio { width: 100%; }
+.guide-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.guide-name { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-start { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.guide-start .input { width: 84px; padding: 4px 8px; }
+.guide-pick { align-self: flex-start; cursor: pointer; }
 .timeline input { width: 100%; margin: 0; accent-color: var(--accent); }
 .ruler { display: flex; justify-content: space-between; padding: 0 7px; margin-top: 4px; }
 .ruler span { position: relative; width: 0; display: flex; flex-direction: column; align-items: center; }

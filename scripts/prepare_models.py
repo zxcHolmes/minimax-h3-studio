@@ -2,7 +2,7 @@
 """Download every checkpoint the server uses into a ComfyUI models folder.
 
 The file list comes from server/h3_engine.py (base DiTs, text encoder, VAEs and
-every entry in LORAS, including FastH3 bases, plus the MOSS-Image picture model),
+every entry in LORAS, including FastH3 bases, plus the MOSS-Image picture and MiniMax Music 3 models),
 so adding a LoRA there is enough for it to be prepared.
 Standard library only: run it with any Python 3.9+, no ComfyUI env needed.
 
@@ -26,12 +26,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
 from h3_engine import (  # noqa: E402
-    AUDIO_VAE, CLIP, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, UNETS, VIDEO_VAE,
+    AUDIO_VAE, CLIP, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
+    MUSIC_VAE, UNETS, VIDEO_VAE,
 )
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music")
 
 
 def manifest():
@@ -54,6 +55,9 @@ def manifest():
         ("image", MOSS_REPO, f"diffusion_models/{MOSS_UNET}", "diffusion_models", MOSS_UNET),
         ("image", MOSS_REPO, f"text_encoders/{MOSS_CLIP}", "text_encoders", MOSS_CLIP),
         ("image", MOSS_REPO, f"vae/{MOSS_VAE}", "vae", MOSS_VAE),
+        ("music", MUSIC_REPO, f"diffusion_models/{MUSIC_UNET}", "diffusion_models", MUSIC_UNET),
+        ("music", MUSIC_REPO, f"text_encoders/{MUSIC_CLIP}", "text_encoders", MUSIC_CLIP),
+        ("music", MUSIC_REPO, f"vae/{MUSIC_VAE}", "vae", MUSIC_VAE),
     ]
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
     families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}

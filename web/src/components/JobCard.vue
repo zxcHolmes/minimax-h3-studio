@@ -1,21 +1,24 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { shortModel } from '../models'
-import { PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
 const props = defineProps({ job: Object, now: Number })
-const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame'])
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio'])
 
-const STAGES = { loading: 'Loading model', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
-const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture' }
+const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
+const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
 // Pictures: decoding a single image is instant, so sampling gets nearly all of the bar.
 const PICTURE_SPANS = { loading: [0, 0], encoding: [0, 0.1], sampling: [0.1, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
+// Music: the text encoder writes the acoustic tokens first, which takes most of the time.
+const MUSIC_SPANS = { loading: [0, 0], composing: [0, 0.72], sampling: [0.72, 0.96], decoding: [0.96, 0.99], saving: [0.99, 1] }
 const isPicture = computed(() => props.job.mode === 't2i')
+const isMusic = computed(() => props.job.mode === 't2m')
 const overall = computed(() => {
-  const span = (isPicture.value ? PICTURE_SPANS : SPANS)[props.job.stage]
+  const span = (isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS : SPANS)[props.job.stage]
   return span ? span[0] + (span[1] - span[0]) * (props.job.progress || 0) : 0
 })
 
@@ -26,7 +29,13 @@ const elapsed = computed(() => {
 })
 
 const frames = computed(() => props.job.result?.frames)
-const clipLength = computed(() => (frames.value ? (frames.value / 24).toFixed(1) : props.job.duration))
+const clipLength = computed(() => {
+  if (isMusic.value) {
+    const s = Math.round(props.job.result?.seconds ?? props.job.duration)
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  }
+  return `${frames.value ? (frames.value / 24).toFixed(1) : props.job.duration}s`
+})
 const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('en-US', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
 }))
@@ -56,8 +65,12 @@ onBeforeUnmount(() => observer?.disconnect())
 
 <template>
   <article class="card" :class="job.status">
-    <div class="screen" :style="{ aspectRatio: `${job.width} / ${job.height}` }">
-      <a v-if="job.status === 'done' && job.picture_url" :href="job.picture_url" target="_blank" rel="noopener">
+    <div class="screen" :class="{ music: isMusic }" :style="{ aspectRatio: isMusic ? '16 / 6' : `${job.width} / ${job.height}` }">
+      <div v-if="isMusic && job.status === 'done' && job.audio_url" class="player">
+        <PhMusicNotes :size="34" weight="duotone" />
+        <audio :src="job.audio_url" controls preload="none" />
+      </div>
+      <a v-else-if="job.status === 'done' && job.picture_url" :href="job.picture_url" target="_blank" rel="noopener">
         <img class="picture" :src="job.picture_url" :alt="job.prompt" loading="lazy" />
       </a>
       <video
@@ -91,10 +104,15 @@ onBeforeUnmount(() => observer?.disconnect())
         </button>
       </div>
 
+      <details v-if="job.lyrics" class="lyrics">
+        <summary>Lyrics</summary>
+        <pre>{{ job.lyrics }}</pre>
+      </details>
+
       <dl class="specs mono">
-        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
-        <div><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
-        <div v-if="!isPicture"><dt>Length</dt><dd>{{ clipLength }}s</dd></div>
+        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
+        <div v-if="!isMusic"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
+        <div v-if="!isPicture"><dt>Length</dt><dd>{{ clipLength }}</dd></div>
         <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
       </dl>
 
@@ -117,6 +135,12 @@ onBeforeUnmount(() => observer?.disconnect())
             <a v-if="job.video_url" class="btn small" :href="job.video_url" :download="`h3_${job.id}.mp4`">
               <PhDownloadSimple :size="14" />Download
             </a>
+            <a v-if="job.audio_url" class="btn small" :href="job.audio_url" :download="`music_${job.id}.mp3`">
+              <PhDownloadSimple :size="14" />Download
+            </a>
+            <button v-if="job.audio_url" class="btn small" title="Use as the guide audio of a video" @click="emit('use-audio', job)">
+              <PhFilmStrip :size="14" />Video
+            </button>
             <template v-if="job.picture_url">
               <a class="btn icon small" :href="job.picture_url" :download="`moss_${job.id}.png`" aria-label="Download" title="Download">
                 <PhDownloadSimple :size="14" />
@@ -141,6 +165,16 @@ onBeforeUnmount(() => observer?.disconnect())
 .screen { position: relative; background: var(--screen); max-height: 420px; width: 100%; }
 .screen video, .picture { width: 100%; height: 100%; display: block; object-fit: contain; background: var(--screen); }
 .screen > a { display: block; width: 100%; height: 100%; }
+.player {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 16px; color: #dfe1e6;
+}
+.player audio { width: min(100%, 420px); }
+.lyrics summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+.lyrics pre {
+  margin: 6px 0 0; font: 12px/1.5 var(--font); color: var(--text-2); white-space: pre-wrap;
+  max-height: 220px; overflow: auto;
+}
 .ghost { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .28; filter: blur(1px); }
 .state {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;

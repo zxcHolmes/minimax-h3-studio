@@ -10,7 +10,7 @@ COLUMNS = (
     "id", "status", "mode", "preset", "prompt", "width", "height", "duration", "seed",
     "image", "video", "thumb", "stage", "progress", "error", "result",
     "created_at", "started_at", "finished_at", "last_image", "refs", "lora", "lora_strength",
-    "picture",
+    "picture", "audio", "lyrics", "guide_audio", "audio_start",
 )
 JSON_COLUMNS = ("result", "refs")
 
@@ -29,11 +29,14 @@ class JobStore:
                 "width INTEGER, height INTEGER, duration REAL, seed INTEGER, image TEXT, "
                 "video TEXT, thumb TEXT, stage TEXT, progress REAL, error TEXT, result TEXT, "
                 "created_at REAL, started_at REAL, finished_at REAL, last_image TEXT, refs TEXT, lora TEXT, "
-                "lora_strength REAL, picture TEXT)")
-            # Databases created before the last-frame, reference, LoRA and picture options lack these columns.
+                "lora_strength REAL, picture TEXT, audio TEXT, lyrics TEXT, guide_audio TEXT, "
+                "audio_start REAL)")
+            # Databases created before the last-frame, reference, LoRA, picture, music and audio-guide options lack these.
             existing = {r["name"] for r in self._db.execute("PRAGMA table_info(jobs)")}
             for column, kind in (("last_image", "TEXT"), ("refs", "TEXT"), ("lora", "TEXT"),
-                                 ("lora_strength", "REAL"), ("picture", "TEXT")):
+                                 ("lora_strength", "REAL"), ("picture", "TEXT"),
+                                 ("audio", "TEXT"), ("lyrics", "TEXT"), ("guide_audio", "TEXT"),
+                                 ("audio_start", "REAL")):
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             self._db.commit()

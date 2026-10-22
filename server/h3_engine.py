@@ -116,7 +116,16 @@ MOSS_VAE = "flux2-vae_small.safetensors"
 IMAGE = {"steps": 25, "cfg": 2.5, "sampler": "er_sde", "scheduler": "simple",
          "negative": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"}
 IMAGE_AREA = 1024 * 1024
-# The template's prompt expansion: Qwen3.5 rewrites a short (often Chinese) request into an English caption.
+
+# Music generation: MiniMax Music 3 with the settings of ComfyUI's text-to-music template. The text encoder
+# writes the acoustic tokens autoregressively from caption + lyrics; the DiT then renders them.
+MUSIC_REPO = "Comfy-Org/MiniMax-Music-3"
+MUSIC_UNET = "minimax_music3_dit_int8_convrot.safetensors"
+MUSIC_CLIP = "minimax_music3_text_encoder_pruned_int8_convrot.safetensors"
+MUSIC_VAE = "minimax_music3_dav.safetensors"
+MUSIC = {"steps": 30, "cfg": 1.7, "sampler": "euler", "scheduler": "simple",
+         "encode_cfg": 1.7, "encode_top_k": 50, "tile": 1536, "overlap": 64}
+MUSIC_DURATION_RANGE = (10, 300)
 
 # Keyframe tags the I2VA prompts in the repo and the ComfyUI docs open with.
 I2V_PREFIX = ("For the target video, at 0.00 seconds into the target video, "
@@ -157,6 +166,11 @@ def image_model_info():
     """What picture jobs run on, as shown to users."""
     return {"unet": MOSS_UNET, "lora": None, "lora_strength": None, "steps": IMAGE["steps"],
             "sampler": IMAGE["sampler"], "cfg": IMAGE["cfg"], "text_encoder": MOSS_CLIP}
+
+
+def music_model_info():
+    return {"unet": MUSIC_UNET, "lora": None, "lora_strength": None, "steps": MUSIC["steps"],
+            "sampler": MUSIC["sampler"], "cfg": MUSIC["cfg"], "text_encoder": MUSIC_CLIP}
 
 
 def image_size(ratio):
@@ -204,6 +218,7 @@ class H3Engine:
         self.unet = None
         self.base = None
         self._moss = None
+        self._music = None
         self._cancel = False
 
     def bootstrap(self):
@@ -220,7 +235,7 @@ class H3Engine:
             BasicGuider, BasicScheduler, KSamplerSelect, RandomNoise, SamplerCustomAdvanced,
         )
         from comfy_extras.nodes_minimax_h3 import (
-            MiniMaxH3ImageToVideo, MiniMaxH3ReferenceToVideo, MiniMaxH3SigmaShift,
+            MiniMaxH3AddGuide, MiniMaxH3ImageToVideo, MiniMaxH3ReferenceToVideo, MiniMaxH3SigmaShift,
         )
         from comfy_extras.nodes_video import CreateVideo
         from comfy_api.latest import Types
@@ -232,7 +247,7 @@ class H3Engine:
             "VAEDecodeAudio": VAEDecodeAudio, "BasicGuider": BasicGuider,
             "BasicScheduler": BasicScheduler, "RandomNoise": RandomNoise,
             "SamplerCustomAdvanced": SamplerCustomAdvanced, "ImageToVideo": MiniMaxH3ImageToVideo,
-            "ReferenceToVideo": MiniMaxH3ReferenceToVideo,
+            "ReferenceToVideo": MiniMaxH3ReferenceToVideo, "AddGuide": MiniMaxH3AddGuide,
             "SigmaShift": MiniMaxH3SigmaShift, "CreateVideo": CreateVideo, "KSamplerSelect": KSamplerSelect,
         }
         self.Types = Types
@@ -313,9 +328,25 @@ class H3Engine:
         if self._cancel:
             raise Canceled()
 
+    def _after_node(self):
+        """What ComfyUI's executor runs after every node under DynamicVRAM. Autoregressive text encoders
+        (MiniMax Music 3) record a per-thread CUDA malloc graph; without this the next job replays a stale one
+        and fails with a device-side assert."""
+        import comfy.memory_management
+        import comfy.model_prefetch
+        if comfy.memory_management.aimdo_enabled:
+            import comfy_aimdo.model_vbar
+            comfy.model_prefetch.cleanup_prefetch_queues()
+            self.mm.reset_cast_buffers()
+            comfy_aimdo.model_vbar.vbars_reset_watermark_limits()
+
     def generate(self, *, lora, prompt, width, height, duration, seed, lora_strength=1.0, image_path=None,
-                 last_image_path=None, ref_paths=(), video_path, thumb_path, on_progress):
-        """Run one job; on_progress(stage, fraction) is called from this thread."""
+                 last_image_path=None, ref_paths=(), audio_path=None, audio_start=0.0, video_path, thumb_path,
+                 on_progress):
+        """Run one job; on_progress(stage, fraction) is called from this thread.
+
+        With `audio_path`, the clip of that file starting at `audio_start` seconds is anchored as the soundtrack
+        from frame 0 (MiniMaxH3AddGuide), so the picture is generated to match it: singing, beats, dialogue."""
         import torch
 
         self._cancel = False
@@ -356,6 +387,10 @@ class H3Engine:
                     cond, latent = self.n["ImageToVideo"].execute(
                         clip=self.clip, vae=self.vae, prompt=prompt, width=width, height=height,
                         length=frame_count(duration), first_frame=first, last_frame=last)
+                if audio_path:
+                    cond = self.n["AddGuide"].execute(positive=cond, latent=latent, frame_idx=0,
+                                                      audio_vae=self.audio_vae,
+                                                      audio=self._audio_clip(audio_path, audio_start, duration))[0]
                 self._check()
 
                 current["stage"] = "sampling"
@@ -389,6 +424,18 @@ class H3Engine:
                      for i, n in enumerate(names)}
         return {"frames": int(images.shape[0]), "steps": steps, "timings": durations,
                 "models": model_info(lora, lora_strength)}
+
+    @staticmethod
+    def _audio_clip(path, start, duration):
+        """The `duration`-long clip of an audio file from `start` seconds, as a ComfyUI AUDIO dict."""
+        from comfy_extras.nodes_audio import load
+        waveform, rate = load(str(path))
+        begin = int(round(start * rate))
+        end = begin + int(math.ceil(frame_count(duration) / FPS * rate))
+        clip = waveform[:, begin:end]
+        if clip.shape[1] < rate // 10:
+            raise ValueError(f"the guide audio has nothing at {start:.2f} s")
+        return {"waveform": clip.unsqueeze(0), "sample_rate": rate}
 
     def _moss_models(self):
         """(model, clip, vae) for pictures, loaded on first use and kept beside H3."""
@@ -453,6 +500,93 @@ class H3Engine:
         durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
                      for i, n in enumerate(names)}
         return {"steps": IMAGE["steps"], "timings": durations, "models": image_model_info()}
+
+    def _music_models(self):
+        """(model, clip, vae) for music, loaded on first use and kept beside H3."""
+        if self._music is None:
+            model = self.nodes.UNETLoader().load_unet(MUSIC_UNET, "default")[0]
+            clip = self.nodes.CLIPLoader().load_clip(MUSIC_CLIP, "minimax", "default")[0]
+            vae = self.nodes.VAELoader().load_vae(MUSIC_VAE)[0]
+            self._music = (model, clip, vae)
+        return self._music
+
+    def generate_music(self, *, caption, lyrics, duration, seed, audio_path, on_progress):
+        """Render one song with MiniMax Music 3; returns the result record. The model may end before `duration`."""
+        import torch
+        from comfy_extras.nodes_audio import VAEDecodeAudioTiled
+        from comfy_extras.nodes_minimax_music import EmptyMiniMaxMusic3LatentAudio, MiniMaxMusic3TextEncode
+
+        self._cancel = False
+        self.mm.interrupt_current_processing(False)
+        timings = {}
+        current = {"stage": None}
+
+        def stage(name):
+            self._after_node()
+            current["stage"] = name
+            on_progress(name, 0.0)
+            timings[name] = time.perf_counter()
+
+        # The text encoder reports progress against the duration limit, the sampler against its steps.
+        def hook(value, total, preview, node_id=None):
+            if current["stage"] in ("composing", "sampling") and total:
+                on_progress(current["stage"], value / total)
+
+        self.utils.set_progress_bar_global_hook(hook)
+        try:
+            with torch.inference_mode():
+                if self._music is None:
+                    stage("loading")
+                model, clip, vae = self._music_models()
+                stage("composing")
+                positive, seconds = MiniMaxMusic3TextEncode.execute(
+                    clip=clip, caption=caption, lyrics=lyrics, seed=seed, max_duration=float(duration),
+                    cfg_scale=MUSIC["encode_cfg"], top_k=MUSIC["encode_top_k"])
+                negative = self.nodes.ConditioningZeroOut().zero_out(positive)[0]
+                latent = EmptyMiniMaxMusic3LatentAudio.execute(seconds=seconds, batch_size=1)[0]
+                self._check()
+
+                stage("sampling")
+                samples = self.nodes.KSampler().sample(
+                    model, seed, MUSIC["steps"], MUSIC["cfg"], MUSIC["sampler"], MUSIC["scheduler"],
+                    positive, negative, latent, denoise=1.0)[0]
+                self._check()
+
+                stage("decoding")
+                audio = VAEDecodeAudioTiled.execute(vae=vae, samples=samples, tile_size=MUSIC["tile"],
+                                                    overlap=MUSIC["overlap"])[0]
+
+                stage("saving")
+                self._save_mp3(audio, audio_path)
+        except self.mm.InterruptProcessingException:
+            raise Canceled()
+        finally:
+            self._after_node()
+            self.utils.set_progress_bar_global_hook(None)
+            self.mm.interrupt_current_processing(False)
+
+        end = time.perf_counter()
+        names = list(timings)
+        durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
+                     for i, n in enumerate(names)}
+        return {"seconds": round(float(seconds), 2), "steps": MUSIC["steps"], "timings": durations,
+                "models": music_model_info()}
+
+    @staticmethod
+    def _save_mp3(audio, path):
+        """Encode the waveform as VBR mp3 V0 with PyAV, as ComfyUI's SaveAudioAdvanced does in the template."""
+        import av
+        wave = audio["waveform"][0].float().cpu()
+        rate = audio["sample_rate"]
+        layout = "mono" if wave.shape[0] == 1 else "stereo"
+        with av.open(str(path), mode="w", format="mp3") as container:
+            stream = container.add_stream("libmp3lame", rate=rate, layout=layout)
+            stream.codec_context.qscale = 1
+            frame = av.AudioFrame.from_ndarray(wave.movedim(0, 1).reshape(1, -1).numpy(), format="flt", layout=layout)
+            frame.sample_rate = rate
+            frame.pts = 0
+            container.mux(stream.encode(frame))
+            container.mux(stream.encode(None))
 
     @staticmethod
     def _save_picture(frame, path):
