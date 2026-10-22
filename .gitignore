@@ -21,3 +21,6 @@ comfy_launcher/gpu.lock
 
 # Local notes
 doc/
+
+# Session handoff notes
+HANDOFF.md

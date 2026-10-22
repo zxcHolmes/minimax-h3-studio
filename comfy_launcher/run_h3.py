@@ -58,6 +58,15 @@ def parse_args():
     p.add_argument("--shift-video", type=float, default=12.0)
     p.add_argument("--shift-audio", type=float, default=3.0)
     p.add_argument("--sampler", default="euler")
+    p.add_argument("--attention-backend", choices=["default", "pytorch", "kitchen"], default="default",
+                   help="Dense attention: default keeps ComfyUI's choice (e.g. --use-sage-attention); "
+                        "kitchen is comfy_kitchen INT8 attention, as in the FastH3 templates")
+    p.add_argument("--vsa", type=float, default=None, metavar="KEEP_PERCENT",
+                   help="Video Sparse Attention for FastH3 checkpoints (they are trained at 10)")
+    p.add_argument("--vsa-start", type=float, default=0.0,
+                   help="Sampling progress where VSA starts (FastH3 templates: 0.2 for t2v/i2v, 0 for OmniRef)")
+    p.add_argument("--save-frames", action="store_true",
+                   help="Also save the decoded frames losslessly as <name>.npy (uint8, T x H x W x 3)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output-dir", type=Path, default=Path("outputs"))
     args = p.parse_args(argv)
@@ -195,6 +204,7 @@ def main():
 
     bootstrap_comfy(args.comfyui, comfy_argv)
 
+    import numpy as np
     import torch
     import nodes
     from comfy_extras.nodes_audio import VAEDecodeAudio
@@ -221,6 +231,16 @@ def main():
                 model = turbo.MiniMaxH3TurboLoRA().apply_lora(model, args.lora, args.lora_strength)[0]
             else:
                 model = nodes.LoraLoaderModelOnly().load_lora_model_only(model, args.lora, args.lora_strength)[0]
+            if args.attention_backend != "default":
+                from comfy_extras.nodes_model_advanced import ModelAttentionBackend
+                backend = {"kitchen": "comfy kitchen attention", "pytorch": "pytorch attention"}[args.attention_backend]
+                model = ModelAttentionBackend.execute(model=model, attention=backend)[0]
+            if args.vsa is not None:
+                from comfy_extras.nodes_sparse_attention import BlockSparseAttention
+                model = BlockSparseAttention.execute(
+                    model=model, selection={"selection": "vsa", "keep_percent": args.vsa},
+                    start_percent=args.vsa_start, end_percent=1.0, dense_blocks="", min_tokens=12288,
+                    extra_tokens=256, sink_conditioning="exact_kv_and_rows")[0]
             clip = nodes.CLIPLoader().load_clip(args.clip, "minimax", "default")[0]
             vae = nodes.VAELoader().load_vae(args.vae)[0]
             audio_vae = nodes.VAELoader().load_vae(args.audio_vae)[0]
@@ -265,6 +285,8 @@ def main():
             out = args.output_dir / f"{index:04d}_seed{seed}.mp4"
             video = CreateVideo.execute(images, 24.0, audio)[0]
             video.save_to(str(out), format=Types.VideoContainer("mp4"), codec=Types.VideoCodec("auto"))
+            if args.save_frames:
+                np.save(out.with_suffix(".npy"), (images.clamp(0, 1) * 255).round().to(torch.uint8).cpu().numpy())
 
             total = time.perf_counter() - job_start
             peak = torch.cuda.max_memory_allocated() / 1024 ** 3
