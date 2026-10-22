@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { PhFilmSlate } from '@phosphor-icons/vue'
+import { PhCaretLeft, PhCaretRight, PhFilmSlate } from '@phosphor-icons/vue'
 import { api } from './api'
 import GenerateForm from './components/GenerateForm.vue'
 import JobCard from './components/JobCard.vue'
@@ -13,7 +13,11 @@ const defaultLoras = ref({})
 const aspects = ref([])
 const durationRange = ref([2, 15])
 const maxRefs = ref(6)
+const PAGE_SIZE = 24
 const jobs = ref(null)
+const total = ref(0)
+const page = ref(1)
+const dailies = ref(null)
 const offline = ref(false)
 const form = ref(null)
 const now = ref(Date.now())
@@ -21,7 +25,15 @@ let timer = null
 let clock = null
 
 const ready = computed(() => health.value?.state === 'ready')
-const active = computed(() => (jobs.value || []).some((j) => j.status === 'queued' || j.status === 'running'))
+const active = computed(() => !!(health.value?.running || health.value?.queued)
+  || (jobs.value || []).some((j) => j.status === 'queued' || j.status === 'running'))
+const pages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+// Page buttons: first, last, and the neighbours of the current page; null marks a gap.
+const pageList = computed(() => {
+  const n = pages.value, cur = page.value
+  const keep = [...new Set([1, n, cur - 1, cur, cur + 1])].filter((p) => p >= 1 && p <= n).sort((a, b) => a - b)
+  return keep.flatMap((p, i) => (i && p - keep[i - 1] > 1 ? [null, p] : [p]))
+})
 
 const status = computed(() => {
   if (offline.value) return { text: 'Server unreachable', tone: 'bad' }
@@ -35,10 +47,16 @@ const status = computed(() => {
 
 async function refresh() {
   try {
-    const [h, j] = await Promise.all([api.health(), api.jobs()])
+    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE)])
     health.value = h
-    jobs.value = j
+    total.value = j.total
     offline.value = false
+    // Deleting the last job of the last page leaves it empty: step back.
+    if (!j.items.length && page.value > 1) {
+      page.value = Math.max(1, Math.ceil(j.total / PAGE_SIZE))
+      return refresh()
+    }
+    jobs.value = j.items
   } catch {
     offline.value = true
   }
@@ -54,6 +72,18 @@ async function cancel(job) {
 async function remove(job) {
   if (!confirm('Delete this job and its video?')) return
   await api.remove(job.id)
+  refresh()
+}
+
+function goTo(p) {
+  if (p === page.value || p < 1 || p > pages.value) return
+  page.value = p
+  refresh()
+  dailies.value?.scrollIntoView({ behavior: 'smooth' })
+}
+
+function created() {
+  page.value = 1
   refresh()
 }
 
@@ -98,7 +128,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
         :duration-range="durationRange"
         :max-refs="maxRefs"
         :ready="ready"
-        @created="refresh"
+        @created="created"
       />
       <details v-if="health?.load_error" class="load-error">
         <summary>Model loading error</summary>
@@ -106,8 +136,8 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </details>
     </aside>
 
-    <section class="dailies" aria-label="Generated videos">
-      <h1 class="title">Dailies<span v-if="jobs?.length" class="count mono">{{ jobs.length }}</span></h1>
+    <section ref="dailies" class="dailies" aria-label="Generated videos">
+      <h1 class="title">Dailies<span v-if="total" class="count mono">{{ total }}</span></h1>
 
       <div v-if="jobs === null" class="grid">
         <div v-for="n in 4" :key="n" class="skeleton" />
@@ -127,6 +157,21 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
           @reuse="reuse"
         />
       </div>
+
+      <nav v-if="pages > 1" class="pager mono" aria-label="Pages">
+        <button class="btn icon small" :disabled="page === 1" aria-label="Previous page" @click="goTo(page - 1)">
+          <PhCaretLeft :size="14" />
+        </button>
+        <template v-for="(p, i) in pageList" :key="p ?? `gap${i}`">
+          <span v-if="p === null" class="gap">…</span>
+          <button v-else class="btn small" :class="{ current: p === page }" :aria-current="p === page ? 'page' : null" @click="goTo(p)">
+            {{ p }}
+          </button>
+        </template>
+        <button class="btn icon small" :disabled="page === pages" aria-label="Next page" @click="goTo(page + 1)">
+          <PhCaretRight :size="14" />
+        </button>
+      </nav>
     </section>
   </main>
 </template>
@@ -171,6 +216,11 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
   padding: 90px 24px; color: var(--muted); border: 1.5px dashed var(--line); border-radius: var(--r-card);
 }
 .empty p { margin: 0; max-width: 34ch; }
+.pager { display: flex; justify-content: center; align-items: center; gap: 6px; margin: 28px 0 8px; }
+.pager .small { padding: 4px 11px; font-size: 12px; min-width: 32px; justify-content: center; }
+.pager .icon.small { padding: 5px 7px; }
+.pager .current { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pager .gap { color: var(--muted); padding: 0 2px; }
 .load-error { margin-top: 16px; }
 .load-error summary { color: var(--live); cursor: pointer; font-size: 12.5px; }
 .load-error pre { white-space: pre-wrap; font-size: 11px; color: var(--live); }

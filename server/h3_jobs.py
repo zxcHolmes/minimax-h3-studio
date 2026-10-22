@@ -57,10 +57,15 @@ class JobStore:
             row = self._db.execute("SELECT * FROM jobs WHERE id = ?", [job_id]).fetchone()
         return self._decode(row) if row else None
 
-    def list(self, limit=100):
+    def list(self, limit=100, offset=0):
         with self._lock:
-            rows = self._db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", [limit]).fetchall()
+            rows = self._db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                                    [limit, offset]).fetchall()
         return [self._decode(r) for r in rows]
+
+    def count(self):
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
     def queued_ids(self):
         with self._lock:

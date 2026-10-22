@@ -151,8 +151,10 @@ async def presets(request):
 async def list_jobs(request):
     store = request.app["store"]
     limit = min(int(request.query.get("limit", "60")), 500)
+    offset = max(int(request.query.get("offset", "0")), 0)
     positions = queue_positions(store)
-    return web.json_response([job_view(j, positions) for j in store.list(limit)])
+    return web.json_response([job_view(j, positions) for j in store.list(limit, offset)],
+                             headers={"X-Total-Count": str(store.count())})
 
 
 async def get_job(request):
