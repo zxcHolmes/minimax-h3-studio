@@ -92,8 +92,8 @@ onBeforeUnmount(() => observer?.disconnect())
         <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
       </dl>
 
-      <p v-if="job.models" class="models mono" :title="`${job.models.unet}\n${job.models.lora}`">
-        {{ shortModel(job.models.unet) }} + {{ shortModel(job.models.lora) }}
+      <p v-if="job.models" class="models mono" :title="[job.models.unet, job.models.lora].filter(Boolean).join('\n')">
+        {{ shortModel(job.models.unet) }}<template v-if="job.models.lora"> + {{ shortModel(job.models.lora) }}</template>
       </p>
 
       <details v-if="job.status === 'failed' && job.error" class="error">

@@ -8,6 +8,7 @@ import Logo from './components/Logo.vue'
 
 const health = ref(null)
 const resolutions = ref([])
+const groups = ref([])
 const loras = ref([])
 const defaultLoras = ref({})
 const aspects = ref([])
@@ -96,6 +97,7 @@ onMounted(async () => {
   try {
     const p = await api.presets()
     resolutions.value = p.resolutions
+    groups.value = p.groups || []
     loras.value = p.loras
     defaultLoras.value = p.default_loras
     aspects.value = p.aspect_ratios
@@ -122,6 +124,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       <GenerateForm
         ref="form"
         :resolutions="resolutions"
+        :groups="groups"
         :loras="loras"
         :default-loras="defaultLoras"
         :aspects="aspects"

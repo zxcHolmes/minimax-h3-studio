@@ -22,7 +22,7 @@ from pathlib import Path
 from aiohttp import web
 
 from h3_engine import (
-    ASPECT_RATIOS, DEFAULT_LORAS, LEGACY_PRESETS, LORAS, MAX_REFS, RESOLUTIONS, Canceled, H3Engine, canvas_size,
+    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORAS, MAX_REFS, RESOLUTIONS, Canceled, H3Engine, canvas_size,
     model_info, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
@@ -130,7 +130,7 @@ async def health(request):
     worker = request.app["worker"]
     return web.json_response({
         "state": worker.state, "load_error": worker.load_error, "running": worker.running_id,
-        "family": worker.engine.family,
+        "family": worker.engine.family, "unet": worker.engine.unet,
         "queued": len(request.app["store"].queued_ids()), "loaded_at": worker.loaded_at,
     })
 
@@ -139,7 +139,8 @@ async def presets(request):
     return web.json_response({
         "resolutions": [{"id": k, "sizes": {a: canvas_size(k, r) for a, r in ASPECT_RATIOS.items()}}
                         for k in RESOLUTIONS],
-        "loras": [{"id": k, "family": v["family"], "label": v["label"], "steps": v["steps"],
+        "groups": [{"id": k, "label": v} for k, v in GROUPS.items()],
+        "loras": [{"id": k, "group": v["group"], "family": v["family"], "label": v["label"], "steps": v["steps"],
                    "resolutions": v["resolutions"], "models": model_info(k)} for k, v in LORAS.items()],
         "default_loras": DEFAULT_LORAS,
         "aspect_ratios": list(ASPECT_RATIOS),

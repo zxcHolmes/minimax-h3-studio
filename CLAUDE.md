@@ -39,6 +39,15 @@ Resolution (`RESOLUTIONS`: 544p = 960×544 pixel area, 768p = 1344×768 pixel ar
 | `lightx2v-ref-v0.1` (reference 544p default) | ref2va | `ref2v_turbo_4step_v0.1` | 4 | 12/3 | 544p / 768p | ~45s / ~100s |
 | `lightx2v-ref-v1.0` (reference 768p default) | ref2va | `ref2v_turbo_4step_v1.0_768p` | 4 | 12/3 | 768p | ~100s |
 
+FastH3 (FastVideo's distilled 8-step bases) is a second model group (`GROUPS` in `h3_engine.py`). Its `LORAS` entries have `group: "fasth3"`, their own `unet` (+ `unet_source`), `file: None`, `loader: "none"`, a `sampler` and `vsa` settings:
+
+| Key | Family | Base file | Sampler | Shift | VSA keep / start |
+|---|---|---|---|---|---|
+| `fasth3-v2` | fl2va | `fastvideo_fasth3_8step_v2_pruned_int8_convrot` | res_multistep | 10/3 | 10 / 0.2 |
+| `fasth3-omniref` | ref2va | `fasth3_omniref_8step_pruned_int8_convrot` | euler | 12/3 | 10 / 0 |
+
+VSA needs comfy kitchen attention; on the GPU box comfy_kitchen 0.2.39 was rebuilt for CUDA 12.8 (sm_89), because the cu13 wheel crashes on driver 570. FastH3 is not faster than the LoRAs on the 4090; OmniRef's gain is 768p reference shots without the green glow.
+
 Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo): the frontend picks it up through `/api/presets` and `prepare_models.py` downloads it. The base models, text encoder and VAEs all come from `Comfy-Org/MiniMax-H3`.
 
 - Sampling uses the simple scheduler + BasicGuider (no CFG). The sampler is euler, except larryvrh, which uses its own turbo sampler.
@@ -60,19 +69,19 @@ Adding a LoRA only takes one entry in `LORAS` (with `source` set to its HF repo)
 - `comfy_launcher/prompts_*.json`: test prompts.
 - `scripts/prepare_models.py`: standard library only, runs with any python3. The file list is built from `UNETS`, `CLIP`, the VAE constants and `LORAS` in `h3_engine.py`; existing files are skipped, `.part` files allow resuming, and `HF_ENDPOINT` selects a mirror. ComfyUI itself and the larryvrh custom node are cloned by the user, not by this script.
 - `server/h3_engine.py`: resident engine.
-  - The text encoder and VAEs stay loaded. Only one DiT family (fl2va or ref2va) is resident at a time; `_use_family()` unloads the old base before loading the new one. Because DynamicVRAM streams weights from mmap, a switch takes under a second.
-  - Each LoRA is a ModelPatcher clone of the resident base carrying its own LoRA, SigmaShift and sampler. It is created on first use and cached until the base family switches, so switching LoRAs on the same base does not reload the base.
+  - The text encoder and VAEs stay loaded. Only one base DiT is resident at a time (H3 fl2va / ref2va or a FastH3 base, see `unet_file()`); `_use_base()` unloads the old base before loading the new one. Because DynamicVRAM streams weights from mmap, a switch takes under a second.
+  - Each model choice is a ModelPatcher clone of the resident base carrying its own LoRA (if any), SigmaShift, sampler and attention patches. It is created on first use and cached until the base switches, so switching LoRAs on the same base does not reload the base.
   - `generate()` must only be called from the worker thread.
 - `server/h3_jobs.py`: sqlite job store with a thread lock. The `result` and `refs` columns hold JSON. New columns get an ALTER TABLE migration in `__init__`.
 - `server/app.py`: aiohttp server.
   - A worker thread loads the models and runs jobs one at a time in FIFO order.
   - Endpoints: `/api/health`, `/api/presets`, `GET/POST /api/jobs`, `/api/jobs/{id}`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`. Static files are under `/files/{videos,thumbs,uploads}`; every other path goes to the frontend.
   - `POST /api/jobs` takes a multipart form: `prompt`, `resolution` (544p / 768p), `lora` (optional; defaults to the recommended LoRA; the server checks that its base family and resolution match), `duration` (2–15 s), `seed`, `aspect_ratio` (`image` follows the input picture's ratio), `image`, `last_image`, `ref_image` (up to 6, repeatable). The job mode is one of t2v / i2v / fl2v / r2v.
-  - `/api/presets` returns `resolutions`, `loras` and `default_loras`. The job's `preset` column holds the resolution and the `lora` column the LoRA key; old combined ids such as `ref-544p` are migrated at startup by `backfill_lora(LEGACY_PRESETS)`.
+  - `/api/presets` returns `resolutions`, `groups`, `loras` (each with `group`) and `default_loras`. The job's `preset` column holds the resolution and the `lora` column the LoRA key; old combined ids such as `ref-544p` are migrated at startup by `backfill_lora(LEGACY_PRESETS)`.
   - LoRAs and jobs carry a `models` field (base, LoRA, sampler, shift) for the frontend to display. Finished jobs read the models they actually ran on from `result.models`, so later LoRA config changes do not relabel old jobs.
   - index.html is re-read on every request, so a frontend-only deploy needs no restart.
 - `server/h3-server.service.in`: systemd unit template. `deploy.sh` replaces placeholders such as `@USER@` and `@DIR@` with values from `.env` before installing it; the unit activates ComfyUI's Python environment and then runs `app.py`.
-- `web/src/components/GenerateForm.vue`: generation form. The prompt is edited in picture / sound / music sections, or as the raw prompt; also resolution, LoRA choice (filtered by mode and resolution, recommended one marked), aspect ratio, duration ruler, seed and reuse.
+- `web/src/components/GenerateForm.vue`: generation form. The prompt is edited in picture / sound / music sections, or as the raw prompt; also resolution, model group (MiniMax-H3 + LoRA or FastH3), model choice (filtered by group, mode and resolution, recommended one marked), aspect ratio, duration ruler, seed and reuse.
 - `web/src/components/RefImages.vue`: reference image list, each image with a subject description. Image N is `<Subject N>` / `<Picture N>`.
 - `web/src/components/ImageDrop.vue`: drag-and-drop upload for the first / last frame.
 - `web/src/components/JobCard.vue`: job card with progress, video and reuse button; the prompt is clamped to three lines with a Show more toggle.

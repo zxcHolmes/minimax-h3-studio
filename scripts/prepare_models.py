@@ -2,12 +2,13 @@
 """Download every checkpoint the server uses into a ComfyUI models folder.
 
 The file list comes from server/h3_engine.py (base DiTs, text encoder, VAEs and
-every entry in LORAS), so adding a LoRA there is enough for it to be prepared.
+every entry in LORAS, including FastH3 bases), so adding a LoRA there is enough
+for it to be prepared.
 Standard library only: run it with any Python 3.9+, no ComfyUI env needed.
 
     python scripts/prepare_models.py --comfyui /path/to/ComfyUI
     python scripts/prepare_models.py --list                 # show what would be fetched
-    python scripts/prepare_models.py --skip ref2va larryvrh # leave out groups
+    python scripts/prepare_models.py --skip ref2va fasth3   # leave out groups
 
 Existing files are skipped; interrupted downloads resume from their .part file.
 HF_ENDPOINT selects a mirror (e.g. https://hf-mirror.com), HF_TOKEN is sent if set.
@@ -28,7 +29,7 @@ from h3_engine import AUDIO_VAE, CLIP, LORAS, UNETS, VIDEO_VAE  # noqa: E402
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3")
 
 
 def manifest():
@@ -41,10 +42,14 @@ def manifest():
     items += [(family, COMFY_REPO, f"diffusion_models/{name}", "diffusion_models", name)
               for family, name in UNETS.items()]
     for lora in LORAS.values():
-        group = "larryvrh" if lora["loader"] == "larryvrh" else "lightx2v"
-        items.append((group, lora["source"], lora["file"], "loras", lora["file"]))
-    # A LoRA belongs to its family too, so skipping "ref2va" also skips the ref2v LoRAs.
-    families = {lora["file"]: lora["family"] for lora in LORAS.values()}
+        if lora.get("unet"):  # FastH3: its own base, no LoRA
+            items.append(("fasth3", lora["unet_source"], f"diffusion_models/{lora['unet']}",
+                          "diffusion_models", lora["unet"]))
+        if lora["file"]:
+            group = "larryvrh" if lora["loader"] == "larryvrh" else "lightx2v"
+            items.append((group, lora["source"], lora["file"], "loras", lora["file"]))
+    # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
+    families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}
     return [(g, repo, path, sub, name, families.get(name)) for g, repo, path, sub, name in items]
 
 

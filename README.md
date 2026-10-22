@@ -4,6 +4,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 
 - **Text to video**, **image to video** (first frame, or first + last frame) and **reference images to video** (up to 6 subjects).
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
+- FastVideo's distilled [FastH3](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy) 8-step checkpoints as a second model group that runs without a LoRA.
 - Weights stay loaded between jobs; jobs run one at a time from a persistent queue.
 - Output is pixel-identical to the official ComfyUI example workflows with the same settings.
 - One script deploys the server and UI to a GPU machine over SSH; another downloads every checkpoint.
@@ -61,10 +62,10 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 ```bash
 python3 scripts/prepare_models.py --comfyui /path/to/ComfyUI
 python3 scripts/prepare_models.py --list                    # show files and sources
-python3 scripts/prepare_models.py --comfyui ... --skip ref2va larryvrh
+python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -74,6 +75,8 @@ Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`. With `
 | `minimax_h3_ref2va_pruned_int8_convrot` (reference to video) | `diffusion_models` | Comfy-Org/MiniMax-H3 | 21 GB |
 | lightx2v fl2v / ref2v turbo LoRAs (4 files) | `loras` | lightx2v/Minimax-h3-Turbo | 2 GB each |
 | `minimax_h3_turbo_v4_step600_ema` | `loras` | larryvrh/MiniMax-H3-Turbo-Lora | 0.8 GB |
+| `fastvideo_fasth3_8step_v2_pruned_int8_convrot` (FastH3, text / image) | `diffusion_models` | FastVideo/FastVideo-FastH3-Comfy | 22 GB |
+| `fasth3_omniref_8step_pruned_int8_convrot` (FastH3, reference) | `diffusion_models` | FastVideo/FastH3-Omni-Comfy | 22 GB |
 
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
@@ -87,7 +90,7 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 
 Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text. Job cards show the first lines of the prompt; long prompts expand with Show more.
 
-Available LoRAs (the recommended one is preselected):
+Models come in two groups. **MiniMax-H3 + LoRA** runs the base model of the mode with a turbo LoRA (the recommended one is preselected):
 
 | LoRA | Mode | Steps | Resolutions | 5 s clip on a 4090 |
 |---|---|---|---|---|
@@ -96,6 +99,15 @@ Available LoRAs (the recommended one is preselected):
 | larryvrh v4 | text / image | 4 | 544p, 768p | ~40 s / ~82 s |
 | lightx2v ref2v v0.1 | reference | 4 | 544p, 768p | ~45 s / ~100 s |
 | lightx2v ref2v v1.0 | reference | 4 | 768p | ~100 s |
+
+**FastVideo FastH3** runs FastVideo's distilled 8-step checkpoints, which replace the base model and take no LoRA. They use the settings of the ComfyUI FastH3 templates, including comfy_kitchen attention with Video Sparse Attention (keep 10%):
+
+| Model | Mode | Sampler | Shift | 5 s clip on a 4090 |
+|---|---|---|---|---|
+| FastH3 V2 8-step | text / image | res_multistep | 10/3 | ~55 s (544p) / ~110 s (768p) |
+| FastH3 OmniRef 8-step | reference | euler | 12/3 | ~62 s (544p) / ~130 s (768p) |
+
+OmniRef at 768p does not show the green banded glow of the ref2v LoRAs. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
 To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
@@ -122,14 +134,14 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 | Method | Path | |
 |---|---|---|
 | GET | `/api/health` | server state, running job, resident base model |
-| GET | `/api/presets` | resolutions, LoRAs, default LoRA per mode and resolution |
+| GET | `/api/presets` | resolutions, model groups, LoRAs, default LoRA per mode and resolution |
 | GET | `/api/jobs` | recent jobs |
 | POST | `/api/jobs` | create a job (multipart form, below) |
 | GET | `/api/jobs/{id}` | one job |
 | POST | `/api/jobs/{id}/cancel` | cancel a queued or running job |
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 
-`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; defaults to the recommended one), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`.
+`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`.
 
 ```bash
 curl -F resolution=544p -F duration=5 -F aspect_ratio=16:9 \

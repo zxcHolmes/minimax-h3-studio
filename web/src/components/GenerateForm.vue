@@ -7,7 +7,8 @@ import ImageDrop from './ImageDrop.vue'
 import RefImages from './RefImages.vue'
 
 const props = defineProps({
-  resolutions: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array, maxRefs: Number,
+  resolutions: Array, groups: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array,
+  maxRefs: Number,
   ready: Boolean,
 })
 const emit = defineEmits(['created'])
@@ -43,6 +44,7 @@ const sections = ref({ picture: '', sound: '', score: '', ...saved.sections })
 const raw = ref(saved.raw || '')
 // Older saved forms stored combined ids such as "ref-544p".
 const resolution = ref((saved.resolution || saved.preset || '768p').replace('ref-', ''))
+const group = ref(saved.group || 'h3')
 const lora = ref(saved.lora || '')
 const aspect = ref(saved.aspect || '16:9')
 const duration = ref(saved.duration || 5)
@@ -54,11 +56,11 @@ const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
 
-watch([mode, rawMode, sections, raw, resolution, lora, aspect, duration], () => {
+watch([mode, rawMode, sections, raw, resolution, group, lora, aspect, duration], () => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       mode: mode.value, rawMode: rawMode.value, sections: sections.value, raw: raw.value,
-      resolution: resolution.value, lora: lora.value, aspect: aspect.value, duration: duration.value,
+      resolution: resolution.value, group: group.value, lora: lora.value, aspect: aspect.value, duration: duration.value,
     }))
   } catch { /* storage unavailable */ }
 }, { deep: true })
@@ -68,10 +70,13 @@ watch(mode, (m) => {
   if (m === 'i2v' && imageFile.value) aspect.value = 'image'
 })
 
-// The mode picks the base model; the LoRA list shows what runs on it at this resolution.
+// The group and mode pick the base model; the list shows the choices that run on it at this resolution.
+// H3 bases take a LoRA; FastH3 bases are distilled and run on their own.
 const loraOptions = computed(() => (props.loras || []).filter(
-  (l) => l.family === FAMILY[mode.value] && l.resolutions.includes(resolution.value)))
-const recommended = computed(() => props.defaultLoras?.[FAMILY[mode.value]]?.[resolution.value])
+  (l) => l.group === group.value && l.family === FAMILY[mode.value] && l.resolutions.includes(resolution.value)))
+const recommended = computed(() => group.value === 'h3'
+  ? props.defaultLoras?.[FAMILY[mode.value]]?.[resolution.value]
+  : loraOptions.value[0]?.id)
 watch([loraOptions, recommended], () => {
   if (loraOptions.value.length && !loraOptions.value.some((l) => l.id === lora.value)) lora.value = recommended.value
 }, { immediate: true })
@@ -182,10 +187,14 @@ const ticks = computed(() => {
 
 // Measured on the RTX 4090 (int8 bases, triton + sage): sampling seconds per step per second of
 // video, plus encode/decode/save. Switching base model costs well under a second.
-const STEP_COST = { fl2va: { '544p': 1.1, '768p': 3.3 }, ref2va: { '544p': 1.5, '768p': 4 } }
+// FastH3 runs with sparse attention (VSA), which makes its steps cheaper.
+const STEP_COST = {
+  h3: { fl2va: { '544p': 1.1, '768p': 3.3 }, ref2va: { '544p': 1.5, '768p': 4 } },
+  fasth3: { fl2va: { '544p': 1.05, '768p': 2.25 }, ref2va: { '544p': 1.25, '768p': 2.75 } },
+}
 const OVERHEAD = { '544p': 12, '768p': 20 }
 const estimate = computed(() => {
-  const cost = STEP_COST[FAMILY[mode.value]][resolution.value] || 3.3
+  const cost = STEP_COST[group.value]?.[FAMILY[mode.value]][resolution.value] || 3.3
   return Math.round((OVERHEAD[resolution.value] || 20) + cost * (currentLora.value?.steps || 4) * duration.value)
 })
 
@@ -236,8 +245,10 @@ function reuse(job) {
   resolution.value = job.preset
   duration.value = job.duration
   seed.value = String(job.seed)
+  const choice = props.loras?.find((l) => l.id === job.lora)
+  if (choice) group.value = choice.group
   // After the mode watcher has reset the LoRA list for the reused job's mode.
-  nextTick(() => { if (job.lora) lora.value = job.lora })
+  nextTick(() => { if (choice) lora.value = job.lora })
   const sizes = props.resolutions?.find((r) => r.id === job.preset)?.sizes || {}
   const match = Object.entries(sizes).find(([, s]) => s[0] === job.width && s[1] === job.height)
   if (job.mode === 'r2v') {
@@ -351,8 +362,22 @@ defineExpose({ reuse })
     </div>
 
     <div class="field">
-      <span class="field-label">LoRA<span class="aside">The base model follows the mode</span></span>
-      <div class="loras" role="radiogroup" aria-label="LoRA">
+      <span class="field-label">Model<span class="aside">The base model follows the mode</span></span>
+      <div class="presets groups">
+        <button
+          v-for="g in groups"
+          :key="g.id"
+          type="button"
+          class="preset"
+          :class="{ on: group === g.id }"
+          :aria-pressed="group === g.id"
+          @click="group = g.id"
+        >
+          <span class="preset-name">{{ g.label }}</span>
+          <span class="preset-meta mono">{{ g.id === 'h3' ? 'base + LoRA' : 'distilled, no LoRA' }}</span>
+        </button>
+      </div>
+      <div class="loras" role="radiogroup" :aria-label="group === 'h3' ? 'LoRA' : 'Model'">
         <button
           v-for="l in loraOptions"
           :key="l.id"
@@ -369,11 +394,12 @@ defineExpose({ reuse })
       </div>
       <dl v-if="currentLora" class="models">
         <div><dt>Base</dt><dd class="mono" :title="currentLora.models.unet">{{ shortModel(currentLora.models.unet) }}</dd></div>
-        <div><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }}</dd></div>
+        <div v-if="currentLora.models.lora"><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }}</dd></div>
         <div>
           <dt>Sampler</dt>
           <dd class="mono">{{ currentLora.models.sampler }} · {{ currentLora.steps }} steps · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
         </div>
+        <div v-if="currentLora.models.attention"><dt>Attn</dt><dd class="mono">{{ currentLora.models.attention }}</dd></div>
       </dl>
     </div>
 
@@ -474,6 +500,8 @@ defineExpose({ reuse })
 .preset.on { border-color: var(--accent); background: var(--accent-soft); }
 .preset-name { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .preset-meta { font-size: 11.5px; color: var(--muted); }
+.groups { margin-bottom: 8px; }
+.groups .preset-name { font-size: 13.5px; font-weight: 600; }
 .loras { display: flex; flex-direction: column; gap: 6px; }
 .lora {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left;
