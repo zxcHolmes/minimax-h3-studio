@@ -27,6 +27,79 @@ On an RTX 4090 a 5-second clip with sound takes about 30–45 s at 544p and 65�
 
 **Your machine** (where you deploy from): Node.js 18+, `ssh` with key-based login to the GPU machine, `rsync`, and `scp`.
 
+### comfy_kitchen on PyTorch older than cu130
+
+ComfyUI runs the int8 checkpoints' matmuls and FastH3's attention through [comfy_kitchen](https://pypi.org/project/comfy-kitchen/), which has `cuda`, `triton` and `eager` (plain PyTorch) backends. Two things keep the fast backends off on a cu128 setup like the reference machine (torch 2.11.0+cu128, driver 570):
+
+1. The published comfy_kitchen CUDA wheels need the CUDA 13 runtime and an NVIDIA driver r580 or newer, so their CUDA ops do not load on a cu128 setup with driver 570. Rebuild it from source against the CUDA toolkit that matches your torch (source builds support CUDA 12.8 and newer), for your GPU's architecture, and install that wheel into the ComfyUI environment. This is how the reference machine's comfy_kitchen 0.2.39 was built:
+
+   - Prerequisites: the CUDA toolkit matching torch's CUDA (`python -c "import torch; print(torch.version.cuda)"`; here `/usr/local/cuda-12.8` with `nvcc`), CMake 3.26+ and nanobind 2+ (pip fetches both into the build environment), and your GPU's compute capability without the dot (`nvidia-smi --query-gpu=compute_cap --format=csv`: `8.9` → `89` for RTX 40, `86` for RTX 30, `120` for RTX 50). Building only for your own architecture is much faster than the default list.
+   - Get the source from [Comfy-Org/comfy-kitchen](https://github.com/Comfy-Org/comfy-kitchen) at the tag of the version ComfyUI installed (`pip show comfy-kitchen`). It vendors CUTLASS and flash-attention as git submodules, so clone recursively:
+
+     ```bash
+     git clone --branch v0.2.39 --recurse-submodules https://github.com/Comfy-Org/comfy-kitchen ~/build/comfy-kitchen-0.2.39
+     ```
+
+     Keep a copy of the installed package first so you can roll back: `cp -r <site-packages>/comfy_kitchen ~/build/backup_kitchen_cu13`.
+   - Build a wheel inside the ComfyUI environment (about a few minutes; build dependencies such as cmake, ninja and nanobind are fetched by pip):
+
+     ```bash
+     conda activate comfyui            # or the ComfyUI venv
+     cd ~/build/comfy-kitchen-0.2.39
+     export CUDA_HOME=/usr/local/cuda-12.8 PATH=/usr/local/cuda-12.8/bin:$PATH
+     export COMFY_CUDA_ARCHS=89        # your compute capability; setup.py reads it (its README's
+                                       # equivalent is `python setup.py build_ext --cuda-archs="89" bdist_wheel`)
+     export MAX_JOBS=16 CMAKE_BUILD_PARALLEL_LEVEL=16
+     pip wheel . --no-deps -w ~/build/dist -v 2>&1 | tee ~/build/build.log
+     ```
+
+   - Install it over the published wheel and check that the CUDA backend loads:
+
+     ```bash
+     pip install --force-reinstall --no-deps ~/build/dist/comfy_kitchen-0.2.39-*.whl
+     python -c "import comfy_kitchen as ck; print(ck.list_backends()['cuda']['available'])"   # True
+     ```
+
+   If `available` stays `False`, read `unavailable_reason` in `ck.list_backends()['cuda']`; it is usually a toolkit / driver mismatch or a wrong `COMFY_CUDA_ARCHS`. Updating ComfyUI can pull a newer published comfy_kitchen back in; rebuild the new version the same way.
+2. Even then, stock ComfyUI disables the CUDA backend whenever torch is older than cu130, in `comfy/quant_ops.py`:
+
+   ```python
+   if cuda_version < (13,):
+       ck.registry.disable("cuda")
+       logging.warning("WARNING: You need pytorch with cu130 or higher ...")
+   ```
+
+   Patch it so the backend is only disabled when its ops really fail to load:
+
+   ```diff
+   -        if cuda_version < (13,):
+   +        # Local change: comfy_kitchen is built from source for this CUDA version, so keep its CUDA backend
+   +        # below cu130 as long as its ops load; only disable it when they do not.
+   +        if cuda_version < (13,) and not ck.list_backends().get("cuda", {}).get("available"):
+                ck.registry.disable("cuda")
+   ```
+
+   The same change as a command, safe to run more than once (it backs up the original to `quant_ops.py.orig`):
+
+   ```bash
+   cd /path/to/ComfyUI && python3 - <<'EOF'
+   from pathlib import Path
+   p = Path("comfy/quant_ops.py"); t = p.read_text()
+   old = "        if cuda_version < (13,):\n            ck.registry.disable(\"cuda\")"
+   new = ("        if cuda_version < (13,) and not ck.list_backends().get(\"cuda\", {}).get(\"available\"):\n"
+          "            ck.registry.disable(\"cuda\")")
+   if new in t:
+       print("already patched")
+   elif old in t:
+       Path("comfy/quant_ops.py.orig").write_text(t)
+       p.write_text(t.replace(old, new)); print("patched")
+   else:
+       raise SystemExit("pattern not found: ComfyUI changed this code, apply the idea by hand")
+   EOF
+   ```
+
+Keep `--enable-triton-backend` in `H3_COMFY_ARGS` too. Restart the server afterwards and check its startup log (`journalctl -u h3-server`) for `Found comfy_kitchen backend cuda: {'available': True, 'disabled': False, ...}`. On the 4090 this made every model 17–48% faster (the timings in this README). The patch lives in the ComfyUI checkout, not in this repo: re-apply it after updating ComfyUI (a `git pull` may also conflict with it). If the CUDA backend is unavailable, everything still runs on triton, only slower.
+
 ## Quick start
 
 ```bash
