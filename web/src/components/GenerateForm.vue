@@ -15,14 +15,14 @@ const emit = defineEmits(['created'])
 // MiniMax-H3 prompts have three labelled sections; the form edits them separately.
 // Reference mode wraps the same three in the ref2va layout (subjects, summary, retention).
 const SECTIONS = [
-  { key: 'picture', tag: 'integrated_multimodal_description', label: '画面', rows: 6,
-    help: '风格、主体、动作、镜头和光线。台词写在行内：<d>[English] Hello.</d>',
+  { key: 'picture', tag: 'integrated_multimodal_description', label: 'Picture', rows: 6,
+    help: 'Style, subject, action, camera and light. Put dialogue inline: <d>[English] Hello.</d>',
     refTag: 'detailed_description',
-    refHelp: '用 <Subject 1>、<Subject 2> 指代参考图里的主体，写清动作、镜头和光线。台词写在行内：<d>[English] Hello.</d>' },
-  { key: 'sound', tag: 'overall_soundscape', label: '声音', rows: 2,
-    help: '对白、环境声和同步音效。' },
-  { key: 'score', tag: 'non_diegetic_music', label: '配乐', rows: 2,
-    help: '背景音乐。不需要就留空。' },
+    refHelp: 'Refer to the reference subjects as <Subject 1>, <Subject 2>; describe action, camera and light. Put dialogue inline: <d>[English] Hello.</d>' },
+  { key: 'sound', tag: 'overall_soundscape', label: 'Sound', rows: 2,
+    help: 'Dialogue, ambience and sound effects.' },
+  { key: 'score', tag: 'non_diegetic_music', label: 'Music', rows: 2,
+    help: 'Background score. Leave empty for none.' },
 ]
 const PICTURE_HINT = {
   t2v: 'Live-action, cinematic. A fisherman hauls a dripping net onto a wooden boat at sunrise...',
@@ -131,7 +131,7 @@ function toggleRaw() {
     applyDescs(parsed.descs)
     rawMode.value = false
   } else {
-    error.value = '这段提示词的格式没法拆回分段，请继续用原始模式编辑。'
+    error.value = 'This prompt does not follow the section layout; keep editing it as a raw prompt.'
   }
 }
 
@@ -268,38 +268,38 @@ defineExpose({ reuse })
 
 <template>
   <form class="form" @submit.prevent="submit">
-    <div class="modes" role="tablist" aria-label="生成方式">
-      <button type="button" role="tab" :aria-selected="mode === 't2v'" :class="{ on: mode === 't2v' }" @click="mode = 't2v'">文生视频</button>
-      <button type="button" role="tab" :aria-selected="mode === 'i2v'" :class="{ on: mode === 'i2v' }" @click="mode = 'i2v'">图生视频</button>
-      <button type="button" role="tab" :aria-selected="mode === 'r2v'" :class="{ on: mode === 'r2v' }" @click="mode = 'r2v'">参考图</button>
+    <div class="modes" role="tablist" aria-label="Generation mode">
+      <button type="button" role="tab" :aria-selected="mode === 't2v'" :class="{ on: mode === 't2v' }" @click="mode = 't2v'">Text</button>
+      <button type="button" role="tab" :aria-selected="mode === 'i2v'" :class="{ on: mode === 'i2v' }" @click="mode = 'i2v'">Image</button>
+      <button type="button" role="tab" :aria-selected="mode === 'r2v'" :class="{ on: mode === 'r2v' }" @click="mode = 'r2v'">Reference</button>
     </div>
 
     <div v-if="mode === 'r2v'" class="field">
-      <span class="field-label">参考图<span class="aside">人物、物体、场景都可以，第 N 张就是 &lt;Subject N&gt;</span></span>
+      <span class="field-label">Reference images<span class="aside">People, objects or places; image N is &lt;Subject N&gt;</span></span>
       <RefImages v-model="refs" :max="maxRefs || 6" />
     </div>
 
     <div v-if="mode === 'i2v'" class="field">
-      <span class="field-label">关键帧<span class="aside">尾帧可选，给了就在两张图之间过渡</span></span>
+      <span class="field-label">Keyframes<span class="aside">Add a last frame to move between the two</span></span>
       <div class="keyframes">
         <div class="keyframe">
-          <span class="kf-label">首帧</span>
-          <ImageDrop v-model="imageFile" label="首帧" placeholder="拖入或点击选择" @size="imageSize = $event" />
+          <span class="kf-label">First frame</span>
+          <ImageDrop v-model="imageFile" label="first frame" placeholder="Drop or click to choose" @size="imageSize = $event" />
         </div>
         <div class="keyframe">
-          <span class="kf-label">尾帧<span class="muted">（可选）</span></span>
-          <ImageDrop v-model="lastFile" label="尾帧" placeholder="拖入或点击选择" />
+          <span class="kf-label">Last frame <span class="muted">(optional)</span></span>
+          <ImageDrop v-model="lastFile" label="last frame" placeholder="Drop or click to choose" />
         </div>
       </div>
-      <p v-if="lastFile && !imageFile" class="help warn">尾帧需要配合首帧一起用。</p>
+      <p v-if="lastFile && !imageFile" class="help warn">A last frame needs a first frame.</p>
     </div>
 
     <div class="field">
       <div class="field-label">
-        <span>提示词</span>
+        <span>Prompt</span>
         <button type="button" class="btn quiet small" @click="toggleRaw">
           <component :is="rawMode ? PhRows : PhTextAlignLeft" :size="14" />
-          {{ rawMode ? '分段编辑' : '原始提示词' }}
+          {{ rawMode ? 'Sections' : 'Raw prompt' }}
         </button>
       </div>
 
@@ -309,7 +309,7 @@ defineExpose({ reuse })
         class="textarea mono raw"
         rows="12"
         spellcheck="false"
-        aria-label="原始提示词"
+        aria-label="Raw prompt"
         placeholder="integrated_multimodal_description: ..."
       />
       <div v-else class="sections">
@@ -328,12 +328,12 @@ defineExpose({ reuse })
           <p class="help">{{ mode === 'r2v' && s.refHelp ? s.refHelp : s.help }}</p>
         </div>
       </div>
-      <p v-if="mode === 'i2v'" class="help">首帧对应 &lt;Picture 1&gt;，尾帧对应 &lt;Picture 2&gt;。没写的话服务端会自动加上引用。</p>
-      <p v-if="mode === 'r2v' && !rawMode" class="help">主体定义、摘要和保留要求会按参考图自动生成，切到原始提示词可以看到完整内容。</p>
+      <p v-if="mode === 'i2v'" class="help">The first frame is &lt;Picture 1&gt; and the last frame &lt;Picture 2&gt;; the server adds these references if the prompt lacks them.</p>
+      <p v-if="mode === 'r2v' && !rawMode" class="help">Subject definitions, summary and retention notes are generated from the images; open the raw prompt to see the full text.</p>
     </div>
 
     <div class="field">
-      <span class="field-label">清晰度</span>
+      <span class="field-label">Resolution</span>
       <div class="presets">
         <button
           v-for="r in resolutions"
@@ -351,7 +351,7 @@ defineExpose({ reuse })
     </div>
 
     <div class="field">
-      <span class="field-label">LoRA<span class="aside">底模按生成方式自动切换</span></span>
+      <span class="field-label">LoRA<span class="aside">The base model follows the mode</span></span>
       <div class="loras" role="radiogroup" aria-label="LoRA">
         <button
           v-for="l in loraOptions"
@@ -363,22 +363,22 @@ defineExpose({ reuse })
           :aria-checked="lora === l.id"
           @click="lora = l.id"
         >
-          <span class="lora-name">{{ l.label }}<span v-if="l.id === recommended" class="pill">推荐</span></span>
-          <span class="lora-meta mono">{{ l.steps }} 步</span>
+          <span class="lora-name">{{ l.label }}<span v-if="l.id === recommended" class="pill">Recommended</span></span>
+          <span class="lora-meta mono">{{ l.steps }} steps</span>
         </button>
       </div>
       <dl v-if="currentLora" class="models">
-        <div><dt>底模</dt><dd class="mono" :title="currentLora.models.unet">{{ shortModel(currentLora.models.unet) }}</dd></div>
+        <div><dt>Base</dt><dd class="mono" :title="currentLora.models.unet">{{ shortModel(currentLora.models.unet) }}</dd></div>
         <div><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }}</dd></div>
         <div>
-          <dt>采样</dt>
-          <dd class="mono">{{ currentLora.models.sampler }} · {{ currentLora.steps }} 步 · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
+          <dt>Sampler</dt>
+          <dd class="mono">{{ currentLora.models.sampler }} · {{ currentLora.steps }} steps · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
         </div>
       </dl>
     </div>
 
     <div class="field">
-      <span class="field-label">画面比例</span>
+      <span class="field-label">Aspect ratio</span>
       <div class="chips">
         <button
           v-for="a in aspectOptions"
@@ -389,14 +389,14 @@ defineExpose({ reuse })
           :aria-pressed="aspect === a"
           :disabled="a === 'image' && !imageFile"
           @click="aspect = a"
-        >{{ a === 'image' ? '跟随图片' : a }}</button>
+        >{{ a === 'image' ? 'Match image' : a }}</button>
       </div>
     </div>
 
     <div class="field">
       <label for="duration" class="field-label">
-        <span>时长</span>
-        <span class="aside mono">{{ frames }} 帧 / {{ timecode }}</span>
+        <span>Duration</span>
+        <span class="aside mono">{{ frames }} frames / {{ timecode }}</span>
       </label>
       <div class="timeline">
         <input
@@ -417,10 +417,10 @@ defineExpose({ reuse })
     </div>
 
     <div class="field">
-      <label for="seed" class="field-label">种子<span class="aside">留空则随机</span></label>
+      <label for="seed" class="field-label">Seed<span class="aside">Empty for random</span></label>
       <div class="seed">
-        <input id="seed" v-model="seed" class="input mono" type="text" inputmode="numeric" placeholder="随机" />
-        <button type="button" class="btn icon" aria-label="生成随机种子" @click="randomSeed">
+        <input id="seed" v-model="seed" class="input mono" type="text" inputmode="numeric" placeholder="Random" />
+        <button type="button" class="btn icon" aria-label="Pick a random seed" @click="randomSeed">
           <PhShuffle :size="16" />
         </button>
       </div>
@@ -429,11 +429,11 @@ defineExpose({ reuse })
     <div class="submit">
       <span class="estimate">
         <span v-if="outputSize" class="mono">{{ outputSize[0] }}×{{ outputSize[1] }}</span>
-        <span class="muted">预计约 {{ estimate }} 秒</span>
+        <span class="muted">About {{ estimate }} s</span>
       </span>
-      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? '提交中' : '生成视频' }}</button>
+      <button class="btn primary go" :disabled="!canSubmit">{{ submitting ? 'Submitting' : 'Generate video' }}</button>
     </div>
-    <p v-if="!ready" class="help">服务器还没准备好，模型加载完成后才能提交。</p>
+    <p v-if="!ready" class="help">The server is still loading models; you can submit once it is ready.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
   </form>
 </template>

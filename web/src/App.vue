@@ -24,13 +24,13 @@ const ready = computed(() => health.value?.state === 'ready')
 const active = computed(() => (jobs.value || []).some((j) => j.status === 'queued' || j.status === 'running'))
 
 const status = computed(() => {
-  if (offline.value) return { text: '连不上服务器', tone: 'bad' }
+  if (offline.value) return { text: 'Server unreachable', tone: 'bad' }
   const h = health.value
-  if (!h) return { text: '正在连接', tone: '' }
-  if (h.state === 'loading') return { text: '正在加载模型', tone: 'busy' }
-  if (h.state === 'error') return { text: '模型加载失败', tone: 'bad' }
-  if (h.running) return { text: h.queued ? `正在生成，还有 ${h.queued} 个排队` : '正在生成', tone: 'busy' }
-  return { text: h.family === 'ref2va' ? '空闲 · 参考图模型' : '空闲', tone: 'idle' }
+  if (!h) return { text: 'Connecting', tone: '' }
+  if (h.state === 'loading') return { text: 'Loading models', tone: 'busy' }
+  if (h.state === 'error') return { text: 'Models failed to load', tone: 'bad' }
+  if (h.running) return { text: h.queued ? `Generating, ${h.queued} queued` : 'Generating', tone: 'busy' }
+  return { text: h.family === 'ref2va' ? 'Idle · reference model' : 'Idle', tone: 'idle' }
 })
 
 async function refresh() {
@@ -52,7 +52,7 @@ async function cancel(job) {
 }
 
 async function remove(job) {
-  if (!confirm('删除这条记录和它的视频文件？')) return
+  if (!confirm('Delete this job and its video?')) return
   await api.remove(job.id)
   refresh()
 }
@@ -101,12 +101,12 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
         @created="refresh"
       />
       <details v-if="health?.load_error" class="load-error">
-        <summary>模型加载错误</summary>
+        <summary>Model loading error</summary>
         <pre>{{ health.load_error }}</pre>
       </details>
     </aside>
 
-    <section class="dailies" aria-label="生成记录">
+    <section class="dailies" aria-label="Generated videos">
       <h1 class="title">Dailies<span v-if="jobs?.length" class="count mono">{{ jobs.length }}</span></h1>
 
       <div v-if="jobs === null" class="grid">
@@ -114,7 +114,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </div>
       <div v-else-if="!jobs.length" class="empty">
         <PhFilmSlate :size="34" weight="duotone" />
-        <p>还没有视频。写好画面描述，点“生成视频”，结果会出现在这里。</p>
+        <p>No videos yet. Describe a scene and press Generate video; results show up here.</p>
       </div>
       <div v-else class="grid">
         <JobCard

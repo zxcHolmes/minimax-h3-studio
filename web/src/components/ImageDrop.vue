@@ -44,7 +44,7 @@ function pick(f) {
     <template v-if="preview">
       <img :src="preview" :alt="props.label" />
       <span v-if="size" class="size mono">{{ size.w }}×{{ size.h }}</span>
-      <button type="button" class="btn icon remove" :aria-label="`移除${props.label}`" @click.prevent="file = null">
+      <button type="button" class="btn icon remove" :aria-label="`Remove ${props.label}`" @click.prevent="file = null">
         <PhX :size="14" weight="bold" />
       </button>
     </template>

@@ -36,9 +36,9 @@ function remove(id) {
   <div class="refs">
     <div v-for="(it, i) in items" :key="it.id" class="ref">
       <div class="thumb">
-        <img :src="previews[it.id]" :alt="`参考图 ${i + 1}`" />
+        <img :src="previews[it.id]" :alt="`Reference ${i + 1}`" />
         <span class="badge mono">Picture {{ i + 1 }}</span>
-        <button type="button" class="btn icon remove" :aria-label="`移除参考图 ${i + 1}`" @click="remove(it.id)">
+        <button type="button" class="btn icon remove" :aria-label="`Remove reference ${i + 1}`" @click="remove(it.id)">
           <PhX :size="13" weight="bold" />
         </button>
       </div>
@@ -46,8 +46,8 @@ function remove(id) {
         v-model="it.desc"
         class="input desc"
         type="text"
-        :aria-label="`参考图 ${i + 1} 的主体描述`"
-        placeholder="主体描述（英文更稳）"
+        :aria-label="`Subject description for reference ${i + 1}`"
+        placeholder="Describe the subject"
       />
     </div>
 
@@ -59,9 +59,9 @@ function remove(id) {
       @dragleave.prevent="dragging = false"
       @drop.prevent="dragging = false; add($event.dataTransfer.files)"
     >
-      <input type="file" accept="image/*" multiple class="sr-only" aria-label="添加参考图" @change="add($event.target.files); $event.target.value = ''" />
+      <input type="file" accept="image/*" multiple class="sr-only" aria-label="Add reference images" @change="add($event.target.files); $event.target.value = ''" />
       <PhPlus :size="20" />
-      <span>添加参考图</span>
+      <span>Add images</span>
       <span class="count mono">{{ items.length }}/{{ max }}</span>
     </label>
   </div>

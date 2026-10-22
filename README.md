@@ -81,9 +81,9 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 
 | Mode | Base model | Inputs |
 |---|---|---|
-| 文生视频 (text) | fl2va | prompt |
-| 图生视频 (image) | fl2va | first frame, optional last frame |
-| 参考图 (reference) | ref2va | 1–6 images, each with a short subject description |
+| Text | fl2va | prompt |
+| Image | fl2va | first frame, optional last frame |
+| Reference | ref2va | 1–6 images, each with a short subject description |
 
 Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text.
 

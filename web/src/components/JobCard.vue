@@ -6,8 +6,8 @@ import { PhArrowCounterClockwise, PhDownloadSimple, PhImage, PhStop, PhTrash, Ph
 const props = defineProps({ job: Object, now: Number })
 const emit = defineEmits(['cancel', 'remove', 'reuse'])
 
-const STAGES = { loading: '切换模型', encoding: '理解提示词', sampling: '生成画面和声音', decoding: '解码视频', saving: '写入文件' }
-const MODES = { t2v: '文生', i2v: '首帧', fl2v: '首尾帧', r2v: '参考图' }
+const STAGES = { loading: 'Switching model', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
+const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
@@ -24,7 +24,7 @@ const elapsed = computed(() => {
 
 const frames = computed(() => props.job.result?.frames)
 const clipLength = computed(() => (frames.value ? (frames.value / 24).toFixed(1) : props.job.duration))
-const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('zh-CN', {
+const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('en-US', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
 }))
 
@@ -54,9 +54,9 @@ const scene = computed(() => {
             <span class="stage">{{ STAGES[job.stage] || job.stage }}</span>
             <span class="track"><span :style="{ transform: `scaleX(${overall})` }" /></span>
           </template>
-          <span v-else-if="job.status === 'queued'" class="stage">排在第 {{ job.queue_position }} 位</span>
-          <span v-else-if="job.status === 'failed'" class="stage failed"><PhWarningCircle :size="18" />生成失败</span>
-          <span v-else class="stage muted">已取消</span>
+          <span v-else-if="job.status === 'queued'" class="stage">Queued, #{{ job.queue_position }}</span>
+          <span v-else-if="job.status === 'failed'" class="stage failed"><PhWarningCircle :size="18" />Generation failed</span>
+          <span v-else class="stage muted">Canceled</span>
         </div>
       </template>
     </div>
@@ -65,10 +65,10 @@ const scene = computed(() => {
       <p class="scene" :title="scene">{{ scene }}</p>
 
       <dl class="specs mono">
-        <div><dt>模式</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
-        <div><dt>尺寸</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
-        <div><dt>时长</dt><dd>{{ clipLength }}s</dd></div>
-        <div><dt>耗时</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
+        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /></dd></div>
+        <div><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
+        <div><dt>Length</dt><dd>{{ clipLength }}s</dd></div>
+        <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
       </dl>
 
       <p v-if="job.models" class="models mono" :title="`${job.models.unet}\n${job.models.lora}`">
@@ -76,7 +76,7 @@ const scene = computed(() => {
       </p>
 
       <details v-if="job.status === 'failed' && job.error" class="error">
-        <summary>查看错误</summary>
+        <summary>Show error</summary>
         <pre>{{ job.error }}</pre>
       </details>
 
@@ -84,14 +84,14 @@ const scene = computed(() => {
         <span class="meta mono" :title="`seed ${job.seed}`">{{ job.preset }} · {{ created }}</span>
         <div class="actions">
           <button v-if="job.status === 'queued' || job.status === 'running'" class="btn danger small" @click="emit('cancel', job)">
-            <PhStop :size="13" weight="fill" />取消
+            <PhStop :size="13" weight="fill" />Cancel
           </button>
           <template v-else>
             <a v-if="job.video_url" class="btn small" :href="job.video_url" :download="`h3_${job.id}.mp4`">
-              <PhDownloadSimple :size="14" />下载
+              <PhDownloadSimple :size="14" />Download
             </a>
-            <button class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />复用</button>
-            <button class="btn icon small danger" aria-label="删除" @click="emit('remove', job)"><PhTrash :size="14" /></button>
+            <button class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
+            <button class="btn icon small danger" aria-label="Delete" @click="emit('remove', job)"><PhTrash :size="14" /></button>
           </template>
         </div>
       </footer>

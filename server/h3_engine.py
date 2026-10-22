@@ -27,28 +27,28 @@ RESOLUTIONS = {"544p": 960 * 544, "768p": 1344 * 768}
 # The shift has to match the LoRA: ref2v at 6 smears moving subjects into colour blobs.
 LORAS = {
     "lightx2v-8step-v1.0": {
-        "family": "fl2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v 8 步 v1.0", "loader": "core",
+        "family": "fl2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v 8-step v1.0", "loader": "core",
         "file": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
         "steps": 8, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["544p"],
     },
     "lightx2v-4step-v1.3": {
-        "family": "fl2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v 4 步 v1.3", "loader": "core",
+        "family": "fl2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v 4-step v1.3", "loader": "core",
         "file": "minimax_h3_fl2v_turbo_4step_v1.3_768p_comfyui_bf16.safetensors",
         "steps": 4, "shift_video": 6.0, "shift_audio": 3.0, "resolutions": ["768p"],
     },
     # Needs its own LoRA node (adaLN on the pruned base) and its own 4-step sampler.
     "larryvrh-v4": {
-        "family": "fl2va", "source": "larryvrh/MiniMax-H3-Turbo-Lora", "label": "larryvrh v4 4 步", "loader": "larryvrh",
+        "family": "fl2va", "source": "larryvrh/MiniMax-H3-Turbo-Lora", "label": "larryvrh v4 4-step", "loader": "larryvrh",
         "file": "minimax_h3_turbo_v4_step600_ema.safetensors",
         "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["544p", "768p"],
     },
     "lightx2v-ref-v0.1": {
-        "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4 步 v0.1", "loader": "core",
+        "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4-step v0.1", "loader": "core",
         "file": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["544p", "768p"],
     },
     "lightx2v-ref-v1.0": {
-        "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4 步 v1.0", "loader": "core",
+        "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4-step v1.0", "loader": "core",
         "file": "minimax_h3_ref2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
         "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["768p"],
     },
