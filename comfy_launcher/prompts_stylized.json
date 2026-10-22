@@ -1,0 +1,18 @@
+{
+  "examples": [
+    {
+      "task": "t2va",
+      "prompt": "integrated_multimodal_description: [Shot 1] Japanese 2D anime style, clean cel shading, crisp line art, vivid saturated colors, hand-painted background in the style of a summer anime film. A high-school girl with short silver hair and a red scarf runs along a seaside railway platform at golden hour, cherry blossom petals swirling around her, a two-car train pulling in behind her. The camera tracks alongside her at waist height, then she stops, turns toward the camera and smiles, her hair and scarf blowing in the wind. Lens flare from the setting sun, sparkling sea in the background. She says <d>[English] Wait for me, I'm coming!</d>\n\noverall_soundscape: Her light running footsteps on the concrete platform, the rumble and brake hiss of the arriving train, a level-crossing bell ringing in the distance, seagulls and gentle waves, her clear cheerful voice.\n\nnon_diegetic_music: Upbeat anime opening-style score with bright piano and strings, building to a hopeful swell as she turns and smiles.",
+      "duration": 5.1666666667,
+      "aspect_ratio": "16:9",
+      "megapixels": 1.0
+    },
+    {
+      "task": "t2va",
+      "prompt": "integrated_multimodal_description: [Shot 1] Stylized 3D animated feature film look, Pixar-like rendering, soft global illumination, subsurface scattering on skin, rounded exaggerated character design, rich saturated colors. Inside a cozy cluttered wooden workshop, a small round orange robot with big glowing blue eyes tries to stack three teacups on top of each other on a workbench. The teacups wobble, the robot leans in nervously, then the top cup tips over and it catches it at the last moment with a surprised blink. Warm afternoon sunlight streams through a dusty window, floating dust motes. Medium shot, slow push-in toward the robot's face. The robot exclaims <d>[English] Whoa, whoa... got it!</d>\n\noverall_soundscape: Delicate porcelain clinks and rattles, small whirring servo motor sounds as the robot moves, a ticking wall clock, the robot's high-pitched cute synthetic voice.\n\nnon_diegetic_music: Playful pizzicato strings and light woodwinds, pausing in suspense as the cup tips, then a cheerful flourish when it is caught.",
+      "duration": 5.1666666667,
+      "aspect_ratio": "16:9",
+      "megapixels": 1.0
+    }
+  ]
+}

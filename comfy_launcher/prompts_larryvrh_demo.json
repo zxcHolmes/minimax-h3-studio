@@ -1,0 +1,18 @@
+{
+  "examples": [
+    {
+      "task": "t2va",
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action, cinematic documentary look, natural soft dawn light, shallow depth of field. A small fishing harbor at sunrise, mist drifting over calm water. A weathered old fisherman with a grey beard and a knitted cap hauls a dripping net onto the deck of a wooden boat, silver fish flapping in the mesh. His granddaughter, about ten years old, in a yellow raincoat, grabs the other side of the net and pulls with all her strength, laughing. The camera slowly dollies along the deck at eye level, warm golden sunlight catching the water droplets and the fish scales. The old man looks at her proudly and says <d>[English] Easy now, you're stronger than you look.</d>\n\noverall_soundscape: Water dripping and splashing from the net, fish flapping on the wooden deck, the creak of the boat and ropes, distant seagulls, gentle harbor waves, the girl's laughter and the old man's warm, gravelly voice.\n\nnon_diegetic_music: Soft acoustic guitar and light strings, warm and nostalgic.",
+      "duration": 5.1666666667,
+      "aspect_ratio": "16:9",
+      "megapixels": 1.0
+    },
+    {
+      "task": "t2va",
+      "prompt": "integrated_multimodal_description: [Shot 1] Stylized 3D animated feature film look, Pixar-like character design, soft global illumination, subsurface scattering on skin, rich saturated colors. A rainy night on a city rooftop. A curly-haired girl of about eight, wearing oversized goggles and a green raincoat, kneels beside an old brass telescope under a small umbrella taped to a pole. She tightens a screw with a tiny wrench, then the telescope's lens suddenly glows with soft blue light. She gasps, her eyes widening in wonder, and leans in to look through it. Raindrops sparkle in the warm light of a nearby lantern, neon city lights blurred in the background. Medium close-up, slow push-in toward her face. She whispers <d>[English] It works... it really works!</d>\n\noverall_soundscape: Steady rain pattering on the umbrella and rooftop, the click of the wrench, a soft magical hum as the lens lights up, distant city traffic, the girl's excited whisper.\n\nnon_diegetic_music: Gentle celesta and pizzicato strings, rising into a dreamy, magical swell as the lens glows.",
+      "duration": 5.1666666667,
+      "aspect_ratio": "16:9",
+      "megapixels": 1.0
+    }
+  ]
+}

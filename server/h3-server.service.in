@@ -1,0 +1,26 @@
+# Template: deploy.sh fills in the @...@ values from .env and installs the result.
+[Unit]
+Description=MiniMax-H3 Studio video generation server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@/server
+Environment=PYTHONUNBUFFERED=1
+Environment="H3_COMFYUI=@COMFYUI@"
+Environment="H3_DATA=@DIR@/data"
+Environment="H3_WEB_DIST=@DIR@/web_dist"
+Environment="H3_HOST=@HOST@"
+Environment="H3_PORT=@PORT@"
+Environment="H3_COMFY_ARGS=@COMFY_ARGS@"
+# Runs inside the ComfyUI Python env (triton compiles kernels at run time and needs its env vars).
+ExecStart=/bin/bash -c '@ACTIVATE@exec @PYTHON@ @DIR@/server/app.py'
+Restart=on-failure
+RestartSec=5
+# Weights are mmapped/pinned on first use; give a job in flight time to stop.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

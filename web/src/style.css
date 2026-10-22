@@ -1,0 +1,102 @@
+/*
+  Tokens. Shape rule: interactive controls are full pills, cards 14px, inputs 9px.
+  One accent (signal blue). Red only marks real state: a live render or a failure.
+*/
+:root {
+  --bg: #f1f2f4;
+  --surface: #fbfbfc;
+  --surface-sunk: #e9ebee;
+  --text: #15171c;
+  --text-2: #4b505b;
+  --muted: #6f7480;
+  --line: #d9dce1;
+  --accent: #2d5bff;
+  --accent-hover: #1f4ae0;
+  --accent-ink: #f7f9ff;
+  --accent-soft: #e6ecff;
+  --live: #d93d42;
+  --done: #17845a;
+  --screen: #0d0e11;
+  --shadow: 0 1px 2px rgba(21, 23, 28, .05), 0 8px 28px -14px rgba(21, 23, 28, .18);
+
+  --r-card: 14px;
+  --r-input: 9px;
+
+  --font: "Geist Variable", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Geist Mono Variable", "SF Mono", Menlo, monospace;
+
+  color-scheme: light;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1013;
+    --surface: #17191d;
+    --surface-sunk: #0b0c0e;
+    --text: #ebecef;
+    --text-2: #b4b8c1;
+    --muted: #8a8f9a;
+    --line: #2a2d34;
+    --accent: #5b7fff;
+    --accent-hover: #7895ff;
+    --accent-ink: #0b0f1f;
+    --accent-soft: #1b2340;
+    --live: #f0585d;
+    --done: #3cc48a;
+    --screen: #08090b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px -16px rgba(0, 0, 0, .6);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); min-height: 100dvh; }
+button, input, textarea { font: inherit; color: inherit; }
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 500; white-space: nowrap;
+  cursor: pointer; transition: border-color .15s, background .15s, transform .1s;
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--text-2); }
+.btn.quiet:hover:not(:disabled) { background: var(--surface-sunk); }
+.btn.danger:hover:not(:disabled) { color: var(--live); border-color: var(--live); }
+.btn.icon { padding: 6px; }
+
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field-label {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+}
+.field-label .aside { font-weight: 400; color: var(--muted); }
+.help { font-size: 12px; color: var(--muted); margin: 0; }
+
+.input, .textarea {
+  width: 100%; background: var(--surface-sunk); border: 1px solid transparent;
+  border-radius: var(--r-input); padding: 9px 12px; outline: none;
+  transition: border-color .15s, background .15s;
+}
+.input::placeholder, .textarea::placeholder { color: var(--muted); }
+.input:focus, .textarea:focus { background: var(--surface); border-color: var(--accent); }
+.textarea { resize: vertical; line-height: 1.55; }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
