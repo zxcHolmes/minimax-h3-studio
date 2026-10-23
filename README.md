@@ -282,7 +282,7 @@ It also takes `--first-frame`, `--last-frame`, repeated `--ref-image`, `--jobs-j
 
 ## Making an animated series
 
-[doc/animated-short-workflow.md](doc/animated-short-workflow.md) describes how an agent such as Claude Code directs a multi-episode animated short through the HTTP API: a character bible with fixed looks and voices, casting clips that provide reference images, storyboards, reference-mode shots that keep characters consistent, QC, and assembling each episode with ffmpeg.
+[doc/directing-workflow.md](doc/directing-workflow.md) describes how an agent such as Claude Code directs a multi-shot production of any genre (animated series, drama, documentary, talking head, commercial, MV) through the HTTP API: a cast and voice bible with fixed looks and voices, casting clips that provide reference images, storyboards planned in ~2-minute batches that the user approves one at a time, reference-mode shots that keep characters consistent, QC, and assembling the result with ffmpeg.
 
 ## Development
 
