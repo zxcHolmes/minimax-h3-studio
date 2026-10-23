@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { PhCaretLeft, PhCaretRight, PhFilmSlate } from '@phosphor-icons/vue'
 import { api } from './api'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import GenerateForm from './components/GenerateForm.vue'
 import JobCard from './components/JobCard.vue'
 import Logo from './components/Logo.vue'
@@ -25,6 +26,7 @@ const page = ref(1)
 const dailies = ref(null)
 const offline = ref(false)
 const form = ref(null)
+const confirmer = ref(null)
 const now = ref(Date.now())
 let timer = null
 let clock = null
@@ -74,8 +76,18 @@ async function cancel(job) {
   refresh()
 }
 
+const OUTPUT = { t2i: 'picture', t2m: 'song' }
+
 async function remove(job) {
-  if (!confirm('Delete this job and its output?')) return
+  const scene = job.prompt.match(/(?:integrated_multimodal_description|detailed_description):\s*([\s\S]*?)(\n\s*\n|$)/)
+  const ok = await confirmer.value.ask({
+    title: 'Delete this job?',
+    detail: (scene ? scene[1] : job.prompt).replace(/^\s*\[Shot \d+\]\s*/, '').trim(),
+    message: `The ${OUTPUT[job.mode] || 'video'} and its uploaded inputs are removed from the server. This cannot be undone.`,
+    image: job.thumb_url,
+    confirmLabel: 'Delete',
+  })
+  if (!ok) return
   await api.remove(job.id)
   refresh()
 }
@@ -207,6 +219,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
       </nav>
     </section>
   </main>
+  <ConfirmDialog ref="confirmer" />
 </template>
 
 <style scoped>
