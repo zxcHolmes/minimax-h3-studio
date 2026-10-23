@@ -23,8 +23,8 @@ from aiohttp import web
 
 from h3_engine import (
     ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
-    RESOLUTIONS, Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info, music_model_info,
-    with_keyframe_prefix,
+    RESOLUTIONS, SAMPLERS, STEPS_RANGE, Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info,
+    music_model_info, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
 
@@ -113,7 +113,7 @@ class Worker(threading.Thread):
             result = self.engine.generate(
                 lora=job["lora"], prompt=job["prompt"], width=job["width"], height=job["height"],
                 duration=job["duration"], seed=job["seed"], lora_strength=job_strength(job),
-                image_path=UPLOADS / job["image"] if job["image"] else None,
+                sampler=job["sampler"], steps=job["steps"], image_path=UPLOADS / job["image"] if job["image"] else None,
                 last_image_path=UPLOADS / job["last_image"] if job["last_image"] else None,
                 ref_paths=[UPLOADS / name for name in job["refs"]],
                 audio_path=UPLOADS / job["guide_audio"] if job["guide_audio"] else None,
@@ -147,7 +147,7 @@ def job_view(job, positions):
     elif job["mode"] == "t2m":
         view["models"] = stored or music_model_info()
     else:
-        view["models"] = stored or (model_info(job["lora"], job_strength(job))
+        view["models"] = stored or (model_info(job["lora"], job_strength(job), job["sampler"], job["steps"])
                                     if job["lora"] in LORAS else None)
     return view
 
@@ -182,6 +182,8 @@ async def presets(request):
         "duration_range": DURATION_RANGE,
         "max_refs": MAX_REFS,
         "lora_strength_range": LORA_STRENGTH_RANGE,
+        "samplers": SAMPLERS,
+        "steps_range": STEPS_RANGE,
         "image": {"sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()}, "models": image_model_info()},
         "music": {"duration_range": MUSIC_DURATION_RANGE, "default_duration": 120, "models": music_model_info()},
     })
@@ -288,18 +290,19 @@ async def create_job(request):
         return bad_request(f"audio_start must be within the audio's {guide[2]:.1f} s")
     if last and not first:
         return bad_request("a last frame needs a first frame")
-    if refs and (first or last):
-        return bad_request("send either ref_image or image / last_image, not both")
     if len(refs) > MAX_REFS:
         return bad_request(f"at most {MAX_REFS} reference images")
-    # Reference images pick the ref2va DiT; everything else runs on fl2va.
-    family = "ref2va" if refs else "fl2va"
-    lora = form.get("lora") or DEFAULT_LORAS[family][resolution]
-    if lora not in LORAS:
+    # Reference images or a ref2va model choice pick the ref2va DiT (which also runs with no references);
+    # everything else runs on fl2va.
+    lora = form.get("lora")
+    if lora and lora not in LORAS:
         return bad_request(f"unknown lora {lora}")
+    family = "ref2va" if refs or (lora and LORAS[lora]["family"] == "ref2va") else "fl2va"
+    if family == "ref2va" and (first or last):
+        return bad_request("ref2va jobs take ref_image, not image / last_image")
+    lora = lora or DEFAULT_LORAS[family][resolution]
     if LORAS[lora]["family"] != family:
-        return bad_request(f"lora {lora} is for {LORAS[lora]['family']} jobs" +
-                           (", which need ref_image" if LORAS[lora]["family"] == "ref2va" else ""))
+        return bad_request(f"lora {lora} is for {LORAS[lora]['family']} jobs")
     if resolution not in LORAS[lora]["resolutions"]:
         return bad_request(f"lora {lora} supports {', '.join(LORAS[lora]['resolutions'])}")
     try:
@@ -310,6 +313,19 @@ async def create_job(request):
         return bad_request(f"lora_strength must be within {LORA_STRENGTH_RANGE}")
     if not LORAS[lora]["file"]:
         lora_strength = 1.0  # FastH3 bases have no LoRA to scale
+    sampler = form.get("sampler") or None
+    if sampler and sampler not in SAMPLERS:
+        return bad_request(f"sampler must be one of {', '.join(SAMPLERS)}")
+    if LORAS[lora]["loader"] == "larryvrh" or sampler == LORAS[lora].get("sampler", "euler"):
+        sampler = None  # larryvrh has its own sampler; the model choice's own needs no override
+    try:
+        steps = int(form.get("steps") or 0) or None
+    except ValueError:
+        return bad_request("steps must be an integer")
+    if steps and not STEPS_RANGE[0] <= steps <= STEPS_RANGE[1]:
+        return bad_request(f"steps must be within {STEPS_RANGE}")
+    if steps == LORAS[lora]["steps"]:
+        steps = None
 
     def save(upload):
         name = f"{os.urandom(8).hex()}{upload[1]}"
@@ -331,11 +347,11 @@ async def create_job(request):
         return bad_request(f"unknown aspect ratio {aspect}")
     width, height = canvas_size(resolution, ratio)
 
-    mode = "r2v" if ref_names else "fl2v" if last_name else "i2v" if image_name else "t2v"
+    mode = "r2v" if family == "ref2va" else "fl2v" if last_name else "i2v" if image_name else "t2v"
     if image_name:
         prompt = with_keyframe_prefix(prompt, duration, last_frame=bool(last_name))
-    job = store.create(mode=mode, preset=resolution, lora=lora, lora_strength=lora_strength, prompt=prompt,
-                       width=width, height=height, duration=duration, seed=seed, image=image_name,
+    job = store.create(mode=mode, preset=resolution, lora=lora, lora_strength=lora_strength, sampler=sampler, steps=steps,
+                       prompt=prompt, width=width, height=height, duration=duration, seed=seed, image=image_name,
                        last_image=last_name, refs=ref_names, guide_audio=guide_name,
                        audio_start=audio_start if guide_name else None)
     if worker.state == "ready":

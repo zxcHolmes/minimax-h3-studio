@@ -117,7 +117,7 @@ onBeforeUnmount(() => observer?.disconnect())
       </dl>
 
       <p v-if="job.models" class="models mono" :title="[job.models.unet, job.models.lora].filter(Boolean).join('\n')">
-        {{ shortModel(job.models.unet) }}<template v-if="job.models.lora"> + {{ shortModel(job.models.lora) }}<template v-if="(job.models.lora_strength ?? 1) !== 1"> ×{{ job.models.lora_strength }}</template></template>
+        {{ shortModel(job.models.unet) }}<template v-if="job.models.lora"> + {{ shortModel(job.models.lora) }}<template v-if="(job.models.lora_strength ?? 1) !== 1"> ×{{ job.models.lora_strength }}</template></template><template v-if="job.sampler"> · {{ job.models.sampler }}</template><template v-if="job.steps"> · {{ job.models.steps }} steps</template>
       </p>
 
       <details v-if="job.status === 'failed' && job.error" class="error">

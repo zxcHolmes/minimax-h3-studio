@@ -8,7 +8,7 @@ import RefImages from './RefImages.vue'
 
 const props = defineProps({
   resolutions: Array, groups: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array,
-  maxRefs: Number, strengthRange: Array, picture: Object, music: Object,
+  maxRefs: Number, strengthRange: Array, samplers: Array, picture: Object, music: Object,
   ready: Boolean,
 })
 const emit = defineEmits(['created'])
@@ -64,6 +64,8 @@ const resolution = ref((saved.resolution || saved.preset || '768p').replace('ref
 const group = ref(saved.group || 'h3')
 const lora = ref(saved.lora || '')
 const strength = ref(saved.strength ?? 1)
+// '' runs the model choice's own sampler.
+const sampler = ref(saved.sampler || '')
 const aspect = ref(saved.aspect || '16:9')
 // Picture mode keeps its own prompt and aspect so switching tabs leaves the video form intact.
 const picPrompt = ref(saved.picPrompt || '')
@@ -94,11 +96,11 @@ const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
 
-watch([mode, rawMode, sections, raw, resolution, group, lora, strength, aspect, duration, picPrompt, picAspect, musicCaption, musicLyrics, musicDuration], () => {
+watch([mode, rawMode, sections, raw, resolution, group, lora, strength, sampler, aspect, duration, picPrompt, picAspect, musicCaption, musicLyrics, musicDuration], () => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       mode: mode.value, rawMode: rawMode.value, sections: sections.value, raw: raw.value,
-      resolution: resolution.value, group: group.value, lora: lora.value, strength: strength.value, aspect: aspect.value, duration: duration.value,
+      resolution: resolution.value, group: group.value, lora: lora.value, strength: strength.value, sampler: sampler.value, aspect: aspect.value, duration: duration.value,
       picPrompt: picPrompt.value, picAspect: picAspect.value,
       musicCaption: musicCaption.value, musicLyrics: musicLyrics.value, musicDuration: musicDuration.value,
     }))
@@ -111,7 +113,18 @@ watch(mode, (m) => {
 })
 
 // The group and mode pick the base model; the list shows the choices that run on it at this resolution.
-// H3 bases take a LoRA; FastH3 bases are distilled and run on their own.
+// H3 bases take a LoRA; FastH3 bases are distilled and run on their own. Groups with no choice for the
+// mode are hidden (reference mode is FastH3 only).
+const groupOptions = computed(() => (props.groups || []).filter(
+  (g) => (props.loras || []).some((l) => l.group === g.id && l.family === FAMILY[mode.value])))
+// The group the user picked; a mode that lacks it borrows another and gives it back afterwards.
+const pickedGroup = ref(group.value)
+function pickGroup(id) { group.value = id; pickedGroup.value = id }
+watch(groupOptions, (opts) => {
+  if (!opts.length) return
+  if (opts.some((g) => g.id === pickedGroup.value)) group.value = pickedGroup.value
+  else if (!opts.some((g) => g.id === group.value)) group.value = opts[0].id
+}, { immediate: true })
 const loraOptions = computed(() => (props.loras || []).filter(
   (l) => l.group === group.value && l.family === FAMILY[mode.value] && l.resolutions.includes(resolution.value)))
 const recommended = computed(() => group.value === 'h3'
@@ -121,6 +134,9 @@ watch([loraOptions, recommended], () => {
   if (loraOptions.value.length && !loraOptions.value.some((l) => l.id === lora.value)) lora.value = recommended.value
 }, { immediate: true })
 const currentLora = computed(() => props.loras?.find((l) => l.id === lora.value))
+// larryvrh runs its own turbo sampler, which is not in the list.
+const samplerChoosable = computed(() => !!currentLora.value && (props.samplers || []).includes(currentLora.value.models.sampler))
+const effectiveSampler = computed(() => (samplerChoosable.value && sampler.value) || currentLora.value?.models.sampler)
 
 function assemble(s) {
   return `integrated_multimodal_description: ${s.picture.trim()}\n\n` +
@@ -128,16 +144,23 @@ function assemble(s) {
     `non_diegetic_music: ${s.score.trim() || 'N/A'}`
 }
 
+// With no reference images the ref2va model runs on the prompt alone: no subjects to define or retain.
 function assembleRef(s) {
   const tags = refs.value.map((_, i) => i + 1)
   const seconds = (frames.value / 24).toFixed(4)
   const names = tags.map((i) => `<Subject ${i}>`)
   const featuring = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]
-  return 'subject_definitions:\n' +
-    refs.value.map((r, i) => `<Subject ${i + 1}> is ${r.desc.trim() || 'the subject'}, as shown in <Picture ${i + 1}>.`).join('\n') +
-    `\n\nsummary:\n[reference generation] A continuous ${seconds}-second video featuring ${featuring || 'the referenced subjects'}, as described below.` +
-    '\n\nretention_analysis:\n' +
-    tags.map((i) => `<Subject ${i}> (appears in [Shot 1]): fully_preserved - Preserve the same appearance as in <Picture ${i}>.`).join('\n') +
+  const subjects = tags.length
+    ? 'subject_definitions:\n' +
+      refs.value.map((r, i) => `<Subject ${i + 1}> is ${r.desc.trim() || 'the subject'}, as shown in <Picture ${i + 1}>.`).join('\n') + '\n\n'
+    : ''
+  const retention = tags.length
+    ? '\n\nretention_analysis:\n' +
+      tags.map((i) => `<Subject ${i}> (appears in [Shot 1]): fully_preserved - Preserve the same appearance as in <Picture ${i}>.`).join('\n')
+    : ''
+  return subjects +
+    `summary:\n[reference generation] A continuous ${seconds}-second video` + (featuring ? ` featuring ${featuring}` : '') + ', as described below.' +
+    retention +
     `\n\ndetailed_description:\n${s.picture.trim()}` +
     `\n\noverall_soundscape:\n${s.sound.trim() || 'N/A'}` +
     `\n\nnon_diegetic_music:\n${s.score.trim() || 'N/A'}`
@@ -266,7 +289,7 @@ const musicEstimate = computed(() => Math.round(20 + MUSIC_SECONDS_PER_SECOND * 
 const canSubmit = computed(() => props.ready && !submitting.value && (
   isPicture.value ? !!picPrompt.value.trim()
     : isMusic.value ? !!musicCaption.value.trim()
-      : hasContent.value && (mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || (mode.value === 'r2v' && refs.value.length))))
+      : hasContent.value && (mode.value === 't2v' || (mode.value === 'i2v' && imageFile.value) || mode.value === 'r2v')))
 
 watch(imageFile, (f) => {
   if (f) aspect.value = 'image'
@@ -308,6 +331,7 @@ async function submit() {
     form.append('resolution', resolution.value)
     form.append('lora', lora.value)
     if (currentLora.value?.models.lora) form.append('lora_strength', String(strength.value))
+    if (samplerChoosable.value && sampler.value) form.append('sampler', sampler.value)
     form.append('aspect_ratio', aspect.value)
     form.append('duration', String(duration.value))
     if (seed.value.trim()) form.append('seed', seed.value.trim())
@@ -355,10 +379,11 @@ function reuse(job) {
   duration.value = job.duration
   seed.value = String(job.seed)
   const choice = props.loras?.find((l) => l.id === job.lora)
-  if (choice) group.value = choice.group
+  if (choice) pickGroup(choice.group)
   // After the mode watcher has reset the LoRA list for the reused job's mode.
   nextTick(() => { if (choice) lora.value = job.lora })
   strength.value = job.lora_strength ?? 1
+  sampler.value = job.sampler || ''
   const sizes = props.resolutions?.find((r) => r.id === job.preset)?.sizes || {}
   const match = Object.entries(sizes).find(([, s]) => s[0] === job.width && s[1] === job.height)
   if (job.mode === 'r2v') {
@@ -613,13 +638,13 @@ defineExpose({ reuse, useAsRef, useAsFrame, useAsAudio })
       <span class="field-label">Model<span class="aside">The base model follows the mode</span></span>
       <div class="presets groups">
         <button
-          v-for="g in groups"
+          v-for="g in groupOptions"
           :key="g.id"
           type="button"
           class="preset"
           :class="{ on: group === g.id }"
           :aria-pressed="group === g.id"
-          @click="group = g.id"
+          @click="pickGroup(g.id)"
         >
           <span class="preset-name">{{ g.label }}</span>
           <span class="preset-meta mono">{{ g.id === 'h3' ? 'base + LoRA' : 'distilled, no LoRA' }}</span>
@@ -653,12 +678,26 @@ defineExpose({ reuse, useAsRef, useAsFrame, useAsAudio })
         <span class="mono strength-value">{{ strength.toFixed(2) }}</span>
         <button v-if="strength !== 1" type="button" class="btn quiet small" @click="strength = 1">Reset</button>
       </div>
+      <div v-if="samplerChoosable" class="sampler">
+        <span class="section-label">Sampler</span>
+        <div class="chips">
+          <button
+            v-for="s in samplers"
+            :key="s"
+            type="button"
+            class="chip"
+            :class="{ on: effectiveSampler === s }"
+            :aria-pressed="effectiveSampler === s"
+            @click="sampler = s === currentLora.models.sampler ? '' : s"
+          >{{ s }}<template v-if="s === currentLora.models.sampler"> (default)</template></button>
+        </div>
+      </div>
       <dl v-if="currentLora" class="models">
         <div><dt>Base</dt><dd class="mono" :title="currentLora.models.unet">{{ shortModel(currentLora.models.unet) }}</dd></div>
         <div v-if="currentLora.models.lora"><dt>LoRA</dt><dd class="mono" :title="currentLora.models.lora">{{ shortModel(currentLora.models.lora) }} × {{ strength.toFixed(2) }}</dd></div>
         <div>
           <dt>Sampler</dt>
-          <dd class="mono">{{ currentLora.models.sampler }} · {{ currentLora.steps }} steps · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
+          <dd class="mono">{{ effectiveSampler }} · {{ currentLora.steps }} steps · shift {{ currentLora.models.shift_video }}/{{ currentLora.models.shift_audio }}</dd>
         </div>
         <div v-if="currentLora.models.attention"><dt>Attn</dt><dd class="mono">{{ currentLora.models.attention }}</dd></div>
       </dl>
@@ -776,6 +815,8 @@ defineExpose({ reuse, useAsRef, useAsFrame, useAsAudio })
 .strength { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .strength .section-label { margin: 0; white-space: nowrap; }
 .strength input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); }
+.sampler { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.sampler .section-label { margin: 0; white-space: nowrap; }
 .strength-value { font-size: 12px; color: var(--text-2); min-width: 32px; text-align: right; }
 .groups .preset-name { font-size: 13.5px; font-weight: 600; }
 .loras { display: flex; flex-direction: column; gap: 6px; }

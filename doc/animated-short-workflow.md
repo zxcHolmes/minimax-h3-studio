@@ -13,15 +13,15 @@ review, especially listening to the dialogue, which the agent cannot hear.
 |---|---|
 | Resolution | 544p, 16:9 (960×544) |
 | Text shots (establishing shots, character tests) | `mode t2v`, LoRA `larryvrh-v4` (fl2va base + `minimax_h3_turbo_v4_step600_ema`) |
-| Shots with characters | `mode r2v`, LoRA `lightx2v-ref-v0.1` (ref2va base + `ref2v_turbo_4step_v0.1`) |
+| Shots with characters | `mode r2v`, model `fasth3-omniref` (FastH3 OmniRef 8-step, the only reference model) |
 | Shot length | 5–15 s, one continuous shot per job |
-| Throughput (RTX 4090) | 5 s ≈ 40 s; 15 s t2v ≈ 140 s; 15 s r2v ≈ 145 s; 10 s r2v ≈ 90 s |
+| Throughput (RTX 4090) | 5 s ≈ 40 s; 15 s t2v ≈ 140 s; 10 s r2v ≈ 90 s |
 
 Why these choices:
 
-- larryvrh loses identity in reference mode, so it is only used for text shots. Reference shots use the
-  lightx2v ref LoRA, which keeps faces, fur patterns and markings well.
-- Stay at 544p. 768p is about 2× slower, puts a green banded glow on subjects in reference mode, and a 15 s
+- larryvrh loses identity in reference mode, so it is only used for text shots. Reference shots use FastH3
+  OmniRef; the lightx2v ref LoRAs it replaced smeared fast motion into streaks.
+- Stay at 544p. 768p is about 2× slower, and a 15 s
   768p job once failed at the very end with NaN audio (`avcodec_send_frame() returned 22`).
 - The server runs one job at a time in FIFO order, so submit a whole episode at once and let it queue.
 
@@ -172,7 +172,7 @@ def frames(seconds):
 
 ```bash
 curl -s -X POST http://<host>:8190/api/jobs \
-  -F "prompt=<prompts/ep01_S04.txt" -F resolution=544p -F lora=lightx2v-ref-v0.1 \
+  -F "prompt=<prompts/ep01_S04.txt" -F resolution=544p -F lora=fasth3-omniref \
   -F aspect_ratio=16:9 -F duration=15 \
   -F ref_image=@refs/leizong.png -F ref_image=@refs/ayan.png
 ```

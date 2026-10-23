@@ -35,9 +35,10 @@ GROUPS = {
 # Model choices. H3 entries are a LoRA on the family's base in UNETS; FastH3 entries
 # name their own `unet` and have no LoRA (`file` None). `resolutions` lists where each
 # one was trained or tested; `source` / `unet_source` are the Hugging Face repos
-# scripts/prepare_models.py downloads from. The shift has to match the checkpoint:
-# ref2v at 6 smears moving subjects into colour blobs. `vsa` turns on comfy_kitchen
-# attention plus Video Sparse Attention as in the FastH3 ComfyUI templates.
+# scripts/prepare_models.py downloads from. The shift has to match the checkpoint.
+# `vsa` turns on comfy_kitchen attention plus Video Sparse Attention as in the FastH3
+# ComfyUI templates. Reference jobs run on FastH3 OmniRef only: the 4-step ref2v LoRAs
+# smeared large motion into streaks even at 6-8 steps.
 LORAS = {
     "lightx2v-8step-v1.0": {
         "group": "h3", "family": "fl2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v 8-step v1.0", "loader": "core",
@@ -54,16 +55,6 @@ LORAS = {
         "group": "h3", "family": "fl2va", "source": "larryvrh/MiniMax-H3-Turbo-Lora", "label": "larryvrh v4 4-step", "loader": "larryvrh",
         "file": "minimax_h3_turbo_v4_step600_ema.safetensors",
         "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["544p", "768p"],
-    },
-    "lightx2v-ref-v0.1": {
-        "group": "h3", "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4-step v0.1", "loader": "core",
-        "file": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
-        "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["544p", "768p"],
-    },
-    "lightx2v-ref-v1.0": {
-        "group": "h3", "family": "ref2va", "source": "lightx2v/Minimax-h3-Turbo", "label": "lightx2v ref2v 4-step v1.0", "loader": "core",
-        "file": "minimax_h3_ref2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
-        "steps": 4, "shift_video": 12.0, "shift_audio": 3.0, "resolutions": ["768p"],
     },
     # FastVideo's 8-step distilled bases, settings from ComfyUI's FastH3 templates.
     "fasth3-v2": {
@@ -82,13 +73,14 @@ LORAS = {
     },
 }
 
-# Recommended LoRA per (family, resolution), used when a request names none.
+# Recommended model choice per (family, resolution), used when a request names none.
 DEFAULT_LORAS = {
     "fl2va": {"544p": "lightx2v-8step-v1.0", "768p": "lightx2v-4step-v1.3"},
-    "ref2va": {"544p": "lightx2v-ref-v0.1", "768p": "lightx2v-ref-v1.0"},
+    "ref2va": {"544p": "fasth3-omniref", "768p": "fasth3-omniref"},
 }
 
-# Jobs created before LoRA selection stored a combined preset id instead.
+# Jobs created before LoRA selection stored a combined preset id instead. The ref ids name
+# LoRAs that are gone; those jobs keep the models they ran on in result.models.
 LEGACY_PRESETS = {
     "544p": ("544p", "lightx2v-8step-v1.0"),
     "768p": ("768p", "lightx2v-4step-v1.3"),
@@ -101,7 +93,6 @@ ASPECT_RATIOS = {"16:9": 16 / 9, "9:16": 9 / 16, "4:3": 4 / 3, "3:4": 3 / 4, "1:
 # Base checkpoints, all from the Comfy-Org/MiniMax-H3 repo (see scripts/prepare_models.py).
 UNETS = {
     "fl2va": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-    "ref2va": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
 }
 MAX_REFS = 6
 CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
@@ -144,6 +135,11 @@ def frame_count(duration):
 # Per-job LoRA strength; 1.0 is what the LoRAs were trained for.
 LORA_STRENGTH_RANGE = (0.0, 2.0)
 
+# Samplers a job may pick instead of its model choice's own; ComfyUI's H3 templates use res_multistep.
+SAMPLERS = ("euler", "res_multistep", "er_sde")
+# Per-job step count instead of the model choice's own; turbo LoRAs also run at more steps than they were distilled for.
+STEPS_RANGE = (1, 30)
+
 
 def unet_file(lora):
     """The base checkpoint a model choice runs on."""
@@ -151,13 +147,21 @@ def unet_file(lora):
     return p.get("unet") or UNETS[p["family"]]
 
 
-def model_info(lora, strength=1.0):
+def sampler_name(lora, sampler=None):
+    """The sampler a job runs: its own pick, else the model choice's. larryvrh always uses its turbo sampler."""
+    p = LORAS[lora]
+    if p["loader"] == "larryvrh":
+        return "larryvrh turbo"
+    return sampler or p.get("sampler", "euler")
+
+
+def model_info(lora, strength=1.0, sampler=None, steps=None):
     """The checkpoints and sampling settings a model choice runs on, as shown to users."""
     p = LORAS[lora]
     vsa = p.get("vsa")
     return {"unet": unet_file(lora), "lora": p["file"], "lora_strength": strength if p["file"] else None,
-            "steps": p["steps"],
-            "sampler": "larryvrh turbo" if p["loader"] == "larryvrh" else p.get("sampler", "euler"),
+            "steps": steps or p["steps"],
+            "sampler": sampler_name(lora, sampler),
             "shift_video": p["shift_video"], "shift_audio": p["shift_audio"],
             "attention": f"VSA {vsa['keep']}%" if vsa else None}
 
@@ -340,7 +344,8 @@ class H3Engine:
             self.mm.reset_cast_buffers()
             comfy_aimdo.model_vbar.vbars_reset_watermark_limits()
 
-    def generate(self, *, lora, prompt, width, height, duration, seed, lora_strength=1.0, image_path=None,
+    def generate(self, *, lora, prompt, width, height, duration, seed, lora_strength=1.0, sampler=None, steps=None,
+                 image_path=None,
                  last_image_path=None, ref_paths=(), audio_path=None, audio_start=0.0, video_path, thumb_path,
                  on_progress):
         """Run one job; on_progress(stage, fraction) is called from this thread.
@@ -357,8 +362,12 @@ class H3Engine:
             on_progress("loading", 0.0)
             timings["loading"] = time.perf_counter()
             self._use_base(lora)
-        model, sigmas, sampler = self._lora_model(lora, lora_strength)
-        steps = LORAS[lora]["steps"]
+        model, sigmas, ksampler = self._lora_model(lora, lora_strength)
+        if sampler and LORAS[lora]["loader"] != "larryvrh":
+            ksampler = self._sampler(sampler)
+        if steps and steps != LORAS[lora]["steps"]:
+            sigmas = self.n["BasicScheduler"].execute(model, "simple", steps, 1.0)[0]
+        steps = steps or LORAS[lora]["steps"]
 
         def stage(name):
             on_progress(name, 0.0)
@@ -397,7 +406,7 @@ class H3Engine:
                 stage("sampling")
                 guider = self.n["BasicGuider"].execute(model, cond)[0]
                 noise = self.n["RandomNoise"].execute(seed)[0]
-                samples = self.n["SamplerCustomAdvanced"].execute(noise, guider, sampler, sigmas, latent)[0]
+                samples = self.n["SamplerCustomAdvanced"].execute(noise, guider, ksampler, sigmas, latent)[0]
                 self._check()
 
                 current["stage"] = "decoding"
@@ -423,7 +432,7 @@ class H3Engine:
         durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
                      for i, n in enumerate(names)}
         return {"frames": int(images.shape[0]), "steps": steps, "timings": durations,
-                "models": model_info(lora, lora_strength)}
+                "models": model_info(lora, lora_strength, sampler, steps)}
 
     @staticmethod
     def _audio_clip(path, start, duration):
