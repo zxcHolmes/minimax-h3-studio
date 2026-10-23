@@ -121,14 +121,15 @@ MUSIC = {"steps": 30, "cfg": 1.7, "sampler": "euler", "scheduler": "simple",
 MUSIC_DURATION_RANGE = (10, 300)
 
 # Upscaling finished videos: SeedVR2 3B with the settings of ComfyUI's SeedVR2 video upscale template
-# (one euler step, lanczos pre-resize, tiled VAE 512/128/64/8, no color correction). The template samples
-# the whole clip at once; here it is split into temporal chunks sized to free VRAM, overlapping by two
-# latent frames that are crossfaded, so 1440p clips fit on 24 GB next to the resident H3 models.
+# (one euler step, lanczos pre-resize, no color correction). Two departures: the template samples the whole
+# clip at once, here it is split into temporal chunks sized to free VRAM, overlapping by two latent frames
+# that are crossfaded; and the template's VAEEncodeTiled / VAEDecodeTiled at 512 px are replaced by the plain
+# VAE nodes, whose SeedVR2 path sizes the work from measured memory figures and runs whole frames when they
+# fit (tiling itself only when not). The forced 512 px tiles made a 10 s 1080p clip spend 480 of 510 s in the VAE.
 SEEDVR2_REPO = "Comfy-Org/SeedVR2"
 SEEDVR2_UNET = "seedvr2_3b_int8_convrot.safetensors"
 SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
-UPSCALE = {"steps": 1, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "color": "none",
-           "tile": (512, 128, 64, 8), "overlap": 2}
+UPSCALE = {"steps": 1, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "color": "none", "overlap": 2}
 # Target short side of each upscale choice.
 UPSCALE_TARGETS = {"1080p": 1080, "1440p": 1440}
 
@@ -650,7 +651,7 @@ class H3Engine:
                 resized = self.utils.common_upscale(source.images.movedim(-1, 1), width, height, "lanczos",
                                                     "disabled").movedim(1, -1)
                 padded = SeedVR2Preprocess.execute(resized_images=resized)[0]
-                latent = self.nodes.VAEEncodeTiled().encode(vae, padded, *UPSCALE["tile"])[0]
+                latent = self.nodes.VAEEncode().encode(vae, padded)[0]
                 chunks, overlap = SeedVR2TemporalChunk.execute(
                     latent=latent, temporal_overlap=UPSCALE["overlap"], chunking_mode={"chunking_mode": "auto"})
                 self._check()
@@ -668,7 +669,7 @@ class H3Engine:
                     SeedVR2TemporalMerge.execute(latents=sampled, temporal_overlap=[overlap])[0]
 
                 stage("decoding")
-                images = self.nodes.VAEDecodeTiled().decode(vae, merged, *UPSCALE["tile"])[0]
+                images = self.nodes.VAEDecode().decode(vae, merged)[0]
                 images = SeedVR2PostProcessing.execute(images=images, original_resized_images=resized,
                                                        color_correction_method=UPSCALE["color"])[0]
                 images = images.reshape(-1, *images.shape[-3:])[:count]

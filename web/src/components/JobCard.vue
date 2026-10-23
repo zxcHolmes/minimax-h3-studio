@@ -38,7 +38,7 @@ const clipLength = computed(() => {
     const s = Math.round(props.job.result?.seconds ?? props.job.duration)
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
   }
-  return `${frames.value ? (frames.value / 24).toFixed(1) : props.job.duration}s`
+  return `${frames.value ? (frames.value / 24).toFixed(1) : +props.job.duration.toFixed(1)}s`
 })
 // Targets above the video's short side ('1080p' -> 1080); picking one queues a SeedVR2 upscale.
 const targets = computed(() => props.job.video_url
