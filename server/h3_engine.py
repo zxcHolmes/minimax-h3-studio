@@ -120,6 +120,18 @@ MUSIC = {"steps": 30, "cfg": 1.7, "sampler": "euler", "scheduler": "simple",
          "encode_cfg": 1.7, "encode_top_k": 50, "tile": 1536, "overlap": 64}
 MUSIC_DURATION_RANGE = (10, 300)
 
+# Upscaling finished videos: SeedVR2 3B with the settings of ComfyUI's SeedVR2 video upscale template
+# (one euler step, lanczos pre-resize, tiled VAE 512/128/64/8, no color correction). The template samples
+# the whole clip at once; here it is split into temporal chunks sized to free VRAM, overlapping by two
+# latent frames that are crossfaded, so 1440p clips fit on 24 GB next to the resident H3 models.
+SEEDVR2_REPO = "Comfy-Org/SeedVR2"
+SEEDVR2_UNET = "seedvr2_3b_int8_convrot.safetensors"
+SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
+UPSCALE = {"steps": 1, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "color": "none",
+           "tile": (512, 128, 64, 8), "overlap": 2}
+# Target short side of each upscale choice.
+UPSCALE_TARGETS = {"1080p": 1080, "1440p": 1440}
+
 # Keyframe tags the I2VA prompts in the repo and the ComfyUI docs open with.
 I2V_PREFIX = ("For the target video, at 0.00 seconds into the target video, "
               "<Picture 1> (from [Shot 1]) is fully referenced.")
@@ -185,6 +197,17 @@ def music_model_info():
             "sampler": MUSIC["sampler"], "cfg": MUSIC["cfg"], "text_encoder": MUSIC_CLIP}
 
 
+def upscale_model_info():
+    return {"unet": SEEDVR2_UNET, "lora": None, "lora_strength": None, "steps": UPSCALE["steps"],
+            "sampler": UPSCALE["sampler"], "vae": SEEDVR2_VAE}
+
+
+def upscale_size(width, height, target):
+    """Width/height of a `width`×`height` video scaled so its short side is the target's, both even (H.264)."""
+    scale = UPSCALE_TARGETS[target] / min(width, height)
+    return max(2, round(width * scale / 2) * 2), max(2, round(height * scale / 2) * 2)
+
+
 def image_size(ratio):
     """Picture width/height of about one megapixel at `ratio`, each a multiple of 16."""
     width = max(16, round(math.sqrt(IMAGE_AREA * ratio) / 16) * 16)
@@ -231,6 +254,7 @@ class H3Engine:
         self.base = None
         self._moss = None
         self._music = None
+        self._seedvr2 = None
         self._cancel = False
 
     def bootstrap(self):
@@ -590,6 +614,82 @@ class H3Engine:
                      for i, n in enumerate(names)}
         return {"seconds": round(float(seconds), 2), "steps": MUSIC["steps"], "timings": durations,
                 "models": music_model_info()}
+
+    def _seedvr2_models(self):
+        """(model, vae) for upscaling, loaded on first use and kept beside H3."""
+        if self._seedvr2 is None:
+            model = self.nodes.UNETLoader().load_unet(SEEDVR2_UNET, "default")[0]
+            vae = self.nodes.VAELoader().load_vae(SEEDVR2_VAE)[0]
+            self._seedvr2 = (model, vae)
+        return self._seedvr2
+
+    def upscale_video(self, *, source_path, width, height, seed, video_path, thumb_path, on_progress):
+        """Upscale a finished video to width×height with SeedVR2, keeping its audio and frame rate."""
+        import torch
+        from comfy_api.latest import InputImpl
+        from comfy_extras.nodes_seedvr import (
+            SeedVR2Conditioning, SeedVR2PostProcessing, SeedVR2Preprocess, SeedVR2TemporalChunk, SeedVR2TemporalMerge,
+        )
+
+        self._cancel = False
+        self.mm.interrupt_current_processing(False)
+        timings = {}
+
+        def stage(name):
+            on_progress(name, 0.0)
+            timings[name] = time.perf_counter()
+
+        try:
+            with torch.inference_mode():
+                if self._seedvr2 is None:
+                    stage("loading")
+                model, vae = self._seedvr2_models()
+                stage("reading")
+                source = InputImpl.VideoFromFile(str(source_path)).get_components()
+                count = source.images.shape[0]
+                resized = self.utils.common_upscale(source.images.movedim(-1, 1), width, height, "lanczos",
+                                                    "disabled").movedim(1, -1)
+                padded = SeedVR2Preprocess.execute(resized_images=resized)[0]
+                latent = self.nodes.VAEEncodeTiled().encode(vae, padded, *UPSCALE["tile"])[0]
+                chunks, overlap = SeedVR2TemporalChunk.execute(
+                    latent=latent, temporal_overlap=UPSCALE["overlap"], chunking_mode={"chunking_mode": "auto"})
+                self._check()
+
+                stage("upscaling")
+                sampled = []
+                for i, chunk in enumerate(chunks):
+                    positive, negative = SeedVR2Conditioning.execute(model=model, vae_conditioning=chunk)
+                    sampled.append(self.nodes.KSampler().sample(
+                        model, seed, UPSCALE["steps"], UPSCALE["cfg"], UPSCALE["sampler"], UPSCALE["scheduler"],
+                        positive, negative, chunk, denoise=1.0)[0])
+                    on_progress("upscaling", (i + 1) / len(chunks))
+                    self._check()
+                merged = sampled[0] if len(sampled) == 1 else \
+                    SeedVR2TemporalMerge.execute(latents=sampled, temporal_overlap=[overlap])[0]
+
+                stage("decoding")
+                images = self.nodes.VAEDecodeTiled().decode(vae, merged, *UPSCALE["tile"])[0]
+                images = SeedVR2PostProcessing.execute(images=images, original_resized_images=resized,
+                                                       color_correction_method=UPSCALE["color"])[0]
+                images = images.reshape(-1, *images.shape[-3:])[:count]
+                self._check()
+
+                stage("saving")
+                video = self.n["CreateVideo"].execute(images, float(source.frame_rate), source.audio)[0]
+                video.save_to(str(video_path), format=self.Types.VideoContainer("mp4"),
+                              codec=self.Types.VideoCodec("auto"))
+                self._save_thumb(images[images.shape[0] // 2], thumb_path)
+        except self.mm.InterruptProcessingException:
+            raise Canceled()
+        finally:
+            self.mm.interrupt_current_processing(False)
+
+        end = time.perf_counter()
+        names = list(timings)
+        durations = {n: round((timings[names[i + 1]] if i + 1 < len(names) else end) - timings[n], 1)
+                     for i, n in enumerate(names)}
+        return {"frames": int(images.shape[0]), "chunks": len(chunks), "steps": UPSCALE["steps"],
+                "timings": durations, "models": upscale_model_info()}
 
     @staticmethod
     def _save_mp3(audio, path):

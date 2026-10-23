@@ -27,12 +27,12 @@ sys.path.insert(0, str(ROOT / "server"))
 
 from h3_engine import (  # noqa: E402
     AUDIO_VAE, CLIP, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
-    MUSIC_VAE, UNETS, VIDEO_VAE,
+    MUSIC_VAE, SEEDVR2_REPO, SEEDVR2_UNET, SEEDVR2_VAE, UNETS, VIDEO_VAE,
 )
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale")
 
 
 def manifest():
@@ -58,6 +58,8 @@ def manifest():
         ("music", MUSIC_REPO, f"diffusion_models/{MUSIC_UNET}", "diffusion_models", MUSIC_UNET),
         ("music", MUSIC_REPO, f"text_encoders/{MUSIC_CLIP}", "text_encoders", MUSIC_CLIP),
         ("music", MUSIC_REPO, f"vae/{MUSIC_VAE}", "vae", MUSIC_VAE),
+        ("upscale", SEEDVR2_REPO, f"diffusion_models/{SEEDVR2_UNET}", "diffusion_models", SEEDVR2_UNET),
+        ("upscale", SEEDVR2_REPO, f"vae/{SEEDVR2_VAE}", "vae", SEEDVR2_VAE),
     ]
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
     families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}

@@ -1,13 +1,13 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { shortModel } from '../models'
-import { PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhArrowsOut, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
-const props = defineProps({ job: Object, now: Number })
-const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio'])
+const props = defineProps({ job: Object, now: Number, upscaleTargets: Array })
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'upscale'])
 
-const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file' }
-const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music' }
+const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
+const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music', upscale: 'Upscale' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
@@ -15,10 +15,14 @@ const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], de
 const PICTURE_SPANS = { loading: [0, 0], encoding: [0, 0.1], sampling: [0.1, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
 // Music: the text encoder writes the acoustic tokens first, which takes most of the time.
 const MUSIC_SPANS = { loading: [0, 0], composing: [0, 0.72], sampling: [0.72, 0.96], decoding: [0.96, 0.99], saving: [0.99, 1] }
+// Upscaling: one SeedVR2 step per temporal chunk; the tiled VAE encode and decode take about as long.
+const UPSCALE_SPANS = { loading: [0, 0], reading: [0, 0.2], upscaling: [0.2, 0.6], decoding: [0.6, 0.97], saving: [0.97, 1] }
 const isPicture = computed(() => props.job.mode === 't2i')
 const isMusic = computed(() => props.job.mode === 't2m')
+const isUpscale = computed(() => props.job.mode === 'upscale')
 const overall = computed(() => {
-  const span = (isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS : SPANS)[props.job.stage]
+  const spans = isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS : isUpscale.value ? UPSCALE_SPANS : SPANS
+  const span = spans[props.job.stage]
   return span ? span[0] + (span[1] - span[0]) * (props.job.progress || 0) : 0
 })
 
@@ -36,6 +40,16 @@ const clipLength = computed(() => {
   }
   return `${frames.value ? (frames.value / 24).toFixed(1) : props.job.duration}s`
 })
+// Targets above the video's short side ('1080p' -> 1080); picking one queues a SeedVR2 upscale.
+const targets = computed(() => props.job.video_url
+  ? (props.upscaleTargets || []).filter((t) => parseInt(t) > Math.min(props.job.width, props.job.height))
+  : [])
+const choosing = ref(false)
+function upscale(target) {
+  choosing.value = false
+  emit('upscale', props.job, target)
+}
+
 const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('en-US', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
 }))
@@ -148,7 +162,13 @@ onBeforeUnmount(() => observer?.disconnect())
               <button class="btn small" title="Use as a reference image" @click="emit('use-ref', job)"><PhUserFocus :size="14" />Reference</button>
               <button class="btn small" title="Use as the first frame" @click="emit('use-frame', job)"><PhFilmStrip :size="14" />Frame</button>
             </template>
-            <button class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
+            <template v-if="targets.length">
+              <button v-if="!choosing" class="btn small" title="Upscale with SeedVR2" @click="choosing = true">
+                <PhArrowsOut :size="14" />Upscale
+              </button>
+              <button v-for="t in targets" v-else :key="t" class="btn small" @click="upscale(t)">{{ t }}</button>
+            </template>
+            <button v-if="!isUpscale" class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
             <button class="btn icon small danger" aria-label="Delete" @click="emit('remove', job)"><PhTrash :size="14" /></button>
           </template>
         </div>

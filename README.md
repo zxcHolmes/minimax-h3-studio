@@ -6,6 +6,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
 - **Picture generation** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), for making reference images and first frames; a finished picture goes into a video job with one click.
 - **Music generation** with [MiniMax Music 3](https://huggingface.co/Comfy-Org/MiniMax-Music-3): songs up to 5 minutes from a caption and lyrics.
+- **Upscaling** finished videos to 1080p or 1440p with [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
 - **Guide audio** for video jobs: anchor a slice of a song or recording as the shot's soundtrack, so singing, speech and motion follow it (music videos, lip sync).
 - FastVideo's distilled [FastH3](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy) 8-step checkpoints as a second model group that runs without a LoRA.
 - Weights stay loaded between jobs; jobs run one at a time from a persistent queue.
@@ -160,6 +161,8 @@ Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth
 | `minimax_music3_dit_int8_convrot` (music) | `diffusion_models` | Comfy-Org/MiniMax-Music-3 | 2.5 GB |
 | `minimax_music3_text_encoder_pruned_int8_convrot` (music text encoder) | `text_encoders` | Comfy-Org/MiniMax-Music-3 | 9.2 GB |
 | `minimax_music3_dav` (music VAE) | `vae` | Comfy-Org/MiniMax-Music-3 | 0.22 GB |
+| `seedvr2_3b_int8_convrot` (upscaling) | `diffusion_models` | Comfy-Org/SeedVR2 | 3.2 GB |
+| `seedvr2_ema_vae_fp16` (upscaling VAE) | `vae` | Comfy-Org/SeedVR2 | 0.48 GB |
 
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
@@ -208,6 +211,8 @@ Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base;
 
 ![Music mode with lyrics and the length warning](doc/screenshots/music.webp)
 
+**Upscaling**: a finished video's **Upscale** button offers the targets above its size (short side 1080 or 1440 px) and queues a new job that runs SeedVR2 3B (int8) with the settings of ComfyUI's SeedVR2 video upscale template: a lanczos resize to the target, one euler step, tiled VAE encode and decode, no color correction. The clip is sampled in temporal chunks sized to the free VRAM, two latent frames overlapping and crossfaded, where the template samples it whole. The audio and frame rate are copied from the source. H3 already produces 768p natively; upscaling adds sharpness, it does not add content. The first upscale job also loads the SeedVR2 models, which then stay resident.
+
 To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
 ## Deploying and operating
@@ -233,11 +238,12 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 | Method | Path | |
 |---|---|---|
 | GET | `/api/health` | server state, running job, resident base model |
-| GET | `/api/presets` | resolutions, model groups, LoRAs, default LoRA per mode and resolution, picture sizes, music length range |
+| GET | `/api/presets` | resolutions, model groups, LoRAs, default LoRA per mode and resolution, picture sizes, music length range, upscale targets |
 | GET | `/api/jobs` | recent jobs |
 | POST | `/api/jobs` | create a job (multipart form, below) |
 | GET | `/api/jobs/{id}` | one job |
 | POST | `/api/jobs/{id}/cancel` | cancel a queued or running job |
+| POST | `/api/jobs/{id}/upscale` | queue a SeedVR2 upscale of a finished video (form field `target`: `1080p` / `1440p`, optional `seed`) |
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 
 `POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh and FastH3), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
@@ -245,6 +251,8 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `seed` (optional). The finished job has `picture_url`.
 
 A music job sends `kind=music` with `prompt` (the caption), `lyrics` (optional), `duration` (maximum length, 10–300 s, default 120) and `seed` (optional). The finished job has `audio_url`; `result.seconds` is the actual length.
+
+An upscale job (mode `upscale`) has `source` (the source job's id), `preset` (the target) and the source's prompt; the finished job has its own `video_url`.
 
 ```bash
 curl -F resolution=544p -F duration=5 -F aspect_ratio=16:9 \

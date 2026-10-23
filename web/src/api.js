@@ -17,5 +17,10 @@ export const api = {
   },
   create: (form) => request('POST', '/api/jobs', form),
   cancel: (id) => request('POST', `/api/jobs/${id}/cancel`),
+  upscale: (id, target) => {
+    const form = new FormData()
+    form.append('target', target)
+    return request('POST', `/api/jobs/${id}/upscale`, form)
+  },
   remove: (id) => request('DELETE', `/api/jobs/${id}`),
 }

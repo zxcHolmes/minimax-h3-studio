@@ -19,6 +19,7 @@ const strengthRange = ref([0, 2])
 const samplers = ref([])
 const picture = ref(null)
 const music = ref(null)
+const upscaleTargets = ref([])
 const PAGE_SIZE = 24
 const jobs = ref(null)
 const total = ref(0)
@@ -92,6 +93,11 @@ async function remove(job) {
   refresh()
 }
 
+async function upscale(job, target) {
+  await api.upscale(job.id, target)
+  created()
+}
+
 function goTo(p) {
   if (p === page.value || p < 1 || p > pages.value) return
   page.value = p
@@ -138,6 +144,7 @@ onMounted(async () => {
     samplers.value = p.samplers || []
     picture.value = p.image || null
     music.value = p.music || null
+    upscaleTargets.value = p.upscale?.targets || []
   } catch { /* refresh() reports offline */ }
   refresh()
   clock = setInterval(() => { now.value = Date.now() }, 1000)
@@ -194,12 +201,14 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
           :key="job.id"
           :job="job"
           :now="now"
+          :upscale-targets="upscaleTargets"
           @cancel="cancel"
           @remove="remove"
           @reuse="reuse"
           @use-ref="useRef"
           @use-frame="useFrame"
           @use-audio="useAudio"
+          @upscale="upscale"
         />
       </div>
 

@@ -23,8 +23,8 @@ from aiohttp import web
 
 from h3_engine import (
     ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
-    RESOLUTIONS, SAMPLERS, STEPS_RANGE, Canceled, H3Engine, canvas_size, fixed_sampling, image_model_info, image_size,
-    model_info, music_model_info, with_keyframe_prefix,
+    RESOLUTIONS, SAMPLERS, STEPS_RANGE, UPSCALE_TARGETS, Canceled, H3Engine, canvas_size, fixed_sampling,
+    image_model_info, image_size, model_info, music_model_info, upscale_model_info, upscale_size, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
 
@@ -110,6 +110,17 @@ class Worker(threading.Thread):
                                   result=result, finished_at=time.time())
                 log.info("job %s done %s", job_id, result)
                 return
+            if job["mode"] == "upscale":
+                source = self.store.get(job["source"])
+                if not source or not source["video"] or not (VIDEOS / source["video"]).is_file():
+                    raise ValueError("the source video has been deleted")
+                result = self.engine.upscale_video(
+                    source_path=VIDEOS / source["video"], width=job["width"], height=job["height"], seed=job["seed"],
+                    video_path=VIDEOS / video, thumb_path=THUMBS / thumb, on_progress=on_progress)
+                self.store.update(job_id, status="done", stage="done", progress=1.0, video=video, thumb=thumb,
+                                  result=result, finished_at=time.time())
+                log.info("job %s done %s", job_id, result)
+                return
             result = self.engine.generate(
                 lora=job["lora"], prompt=job["prompt"], width=job["width"], height=job["height"],
                 duration=job["duration"], seed=job["seed"], lora_strength=job_strength(job),
@@ -146,6 +157,8 @@ def job_view(job, positions):
         view["models"] = stored or image_model_info()
     elif job["mode"] == "t2m":
         view["models"] = stored or music_model_info()
+    elif job["mode"] == "upscale":
+        view["models"] = stored or upscale_model_info()
     else:
         view["models"] = stored or (model_info(job["lora"], job_strength(job), job["sampler"], job["steps"])
                                     if job["lora"] in LORAS else None)
@@ -186,6 +199,7 @@ async def presets(request):
         "steps_range": STEPS_RANGE,
         "image": {"sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()}, "models": image_model_info()},
         "music": {"duration_range": MUSIC_DURATION_RANGE, "default_duration": 120, "models": music_model_info()},
+        "upscale": {"targets": list(UPSCALE_TARGETS), "models": upscale_model_info()},
     })
 
 
@@ -359,6 +373,30 @@ async def create_job(request):
     return web.json_response(job_view(job, queue_positions(store)), status=201)
 
 
+async def upscale_job(request):
+    """Queue a SeedVR2 upscale of a finished video job; the new job keeps the source's prompt for display."""
+    store, worker = request.app["store"], request.app["worker"]
+    source = store.get(request.match_info["id"])
+    if not source:
+        raise web.HTTPNotFound()
+    form = await request.post()
+    target = form.get("target") or "1080p"
+    if target not in UPSCALE_TARGETS:
+        return bad_request(f"target must be one of {', '.join(UPSCALE_TARGETS)}")
+    if source["status"] != "done" or not source["video"]:
+        return bad_request("only finished videos can be upscaled")
+    if min(source["width"], source["height"]) >= UPSCALE_TARGETS[target]:
+        return bad_request(f"the video is already {target} or larger")
+    width, height = upscale_size(source["width"], source["height"], target)
+    raw_seed = (form.get("seed") or "").strip()
+    seed = int(raw_seed) % MAX_SEED if raw_seed.lstrip("-").isdigit() else random.randrange(MAX_SEED)
+    job = store.create(mode="upscale", source=source["id"], preset=target, prompt=source["prompt"], width=width,
+                       height=height, duration=source["duration"], seed=seed, refs=[])
+    if worker.state == "ready":
+        worker.queue.put(job["id"])
+    return web.json_response(job_view(job, queue_positions(store)), status=201)
+
+
 def read_audio(upload):
     """(bytes, suffix, seconds) for an uploaded audio file, None when absent, raises ValueError if unreadable."""
     import av
@@ -430,6 +468,7 @@ def make_app():
     app.router.add_post("/api/jobs", create_job)
     app.router.add_get("/api/jobs/{id}", get_job)
     app.router.add_post("/api/jobs/{id}/cancel", cancel_job)
+    app.router.add_post("/api/jobs/{id}/upscale", upscale_job)
     app.router.add_delete("/api/jobs/{id}", delete_job)
     app.router.add_static("/files/videos", VIDEOS)
     app.router.add_static("/files/pictures", PICTURES)
