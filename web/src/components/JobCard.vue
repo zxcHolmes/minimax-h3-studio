@@ -1,9 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { shortModel } from '../models'
 import { PhArrowCounterClockwise, PhArrowsOut, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
-const props = defineProps({ job: Object, now: Number, upscaleTargets: Array })
+const props = defineProps({ job: Object, now: Number, upscale: Object })
 const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'upscale'])
 
 const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
@@ -15,13 +15,16 @@ const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], de
 const PICTURE_SPANS = { loading: [0, 0], encoding: [0, 0.1], sampling: [0.1, 0.97], decoding: [0.97, 0.99], saving: [0.99, 1] }
 // Music: the text encoder writes the acoustic tokens first, which takes most of the time.
 const MUSIC_SPANS = { loading: [0, 0], composing: [0, 0.72], sampling: [0.72, 0.96], decoding: [0.96, 0.99], saving: [0.99, 1] }
-// Upscaling: one SeedVR2 step per temporal chunk; the tiled VAE encode and decode take about as long.
-const UPSCALE_SPANS = { loading: [0, 0], reading: [0, 0.2], upscaling: [0.2, 0.6], decoding: [0.6, 0.97], saving: [0.97, 1] }
+// SeedVR2: one step per temporal chunk; its VAE encode and decode take most of the time.
+const UPSCALE_SPANS = { loading: [0, 0], reading: [0, 0.25], upscaling: [0.25, 0.32], decoding: [0.32, 0.97], saving: [0.97, 1] }
+// FlashVSR streams the clip, decoding and encoding as it goes, so its chunks cover the whole run.
+const FLASHVSR_SPANS = { loading: [0, 0.03], upscaling: [0.03, 0.98], saving: [0.98, 1] }
 const isPicture = computed(() => props.job.mode === 't2i')
 const isMusic = computed(() => props.job.mode === 't2m')
 const isUpscale = computed(() => props.job.mode === 'upscale')
 const overall = computed(() => {
-  const spans = isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS : isUpscale.value ? UPSCALE_SPANS : SPANS
+  const spans = isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS
+    : isUpscale.value ? (props.job.upscaler === 'flashvsr' ? FLASHVSR_SPANS : UPSCALE_SPANS) : SPANS
   const span = spans[props.job.stage]
   return span ? span[0] + (span[1] - span[0]) * (props.job.progress || 0) : 0
 })
@@ -40,15 +43,24 @@ const clipLength = computed(() => {
   }
   return `${frames.value ? (frames.value / 24).toFixed(1) : +props.job.duration.toFixed(1)}s`
 })
-// Targets above the video's short side ('1080p' -> 1080); picking one queues a SeedVR2 upscale.
+// Targets above the video's short side ('1080p' -> 1080); picking an upscaler and a target queues the job.
 const targets = computed(() => props.job.video_url
-  ? (props.upscaleTargets || []).filter((t) => parseInt(t) > Math.min(props.job.width, props.job.height))
+  ? (props.upscale?.targets || []).filter((t) => parseInt(t) > Math.min(props.job.width, props.job.height))
   : [])
 const choosing = ref(false)
-function upscale(target) {
+const menuEl = ref(null)
+function pickUpscale(upscaler, target) {
   choosing.value = false
-  emit('upscale', props.job, target)
+  emit('upscale', props.job, upscaler, target)
 }
+function closeMenu(e) {
+  if (!menuEl.value?.contains(e.target)) choosing.value = false
+}
+watch(choosing, (open) => {
+  if (open) setTimeout(() => document.addEventListener('click', closeMenu))
+  else document.removeEventListener('click', closeMenu)
+})
+onBeforeUnmount(() => document.removeEventListener('click', closeMenu))
 
 const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('en-US', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -162,12 +174,17 @@ onBeforeUnmount(() => observer?.disconnect())
               <button class="btn small" title="Use as a reference image" @click="emit('use-ref', job)"><PhUserFocus :size="14" />Reference</button>
               <button class="btn small" title="Use as the first frame" @click="emit('use-frame', job)"><PhFilmStrip :size="14" />Frame</button>
             </template>
-            <template v-if="targets.length">
-              <button v-if="!choosing" class="btn small" title="Upscale with SeedVR2" @click="choosing = true">
+            <div v-if="targets.length" ref="menuEl" class="upscale">
+              <button class="btn small" :aria-expanded="choosing" @click="choosing = !choosing">
                 <PhArrowsOut :size="14" />Upscale
               </button>
-              <button v-for="t in targets" v-else :key="t" class="btn small" @click="upscale(t)">{{ t }}</button>
-            </template>
+              <div v-if="choosing" class="menu" role="menu">
+                <div v-for="u in upscale.upscalers" :key="u.id" class="menu-row">
+                  <span class="menu-label">{{ u.label }}</span>
+                  <button v-for="t in targets" :key="t" class="btn small" role="menuitem" @click="pickUpscale(u.id, t)">{{ t }}</button>
+                </div>
+              </div>
+            </div>
             <button v-if="!isUpscale" class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
             <button class="btn icon small danger" aria-label="Delete" @click="emit('remove', job)"><PhTrash :size="14" /></button>
           </template>
@@ -236,6 +253,14 @@ onBeforeUnmount(() => observer?.disconnect())
 .foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
 .meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .actions { display: flex; gap: 6px; }
+.upscale { position: relative; }
+.menu {
+  position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+  background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); white-space: nowrap;
+}
+.menu-row { display: flex; align-items: center; gap: 6px; }
+.menu-label { font-size: 12px; color: var(--text-2); min-width: 96px; }
 .small { padding: 4px 11px; font-size: 12px; }
 .icon.small { padding: 5px; }
 </style>

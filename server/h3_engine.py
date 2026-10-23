@@ -130,6 +130,20 @@ SEEDVR2_REPO = "Comfy-Org/SeedVR2"
 SEEDVR2_UNET = "seedvr2_3b_int8_convrot.safetensors"
 SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
 UPSCALE = {"steps": 1, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "color": "none", "overlap": 2}
+# FlashVSR v1.1 through T8star's FlashVSR+ node (custom_nodes/Comfyui-Flashvsr-Plus-T8), which streams the
+# source mp4 through the one-step DiT in chunks, decodes with the Tiny (TC) decoder and copies the source audio.
+# The node's defaults otherwise (temporal compression 4, decode every 28 latent frames, no color correction);
+# int8 ConvRot DiT through comfy_kitchen. Its pipeline lives on the CPU between jobs.
+FLASHVSR_REPO = "t8star/Flashvsr-Plus-Comfy"
+FLASHVSR_NODE = "Comfyui-Flashvsr-Plus-T8"
+FLASHVSR_DIR = "flashvsr_plus"   # under models/
+FLASHVSR_FILES = ("v1/dit_int8_convrot.safetensors", "v1/LQ_proj_in.ckpt", "TCDecoder.ckpt")
+FLASHVSR = {"mode": "v1", "precision": "int8_convrot", "attention": "auto", "decoder": "tiny"}
+# Upscalers a finished video can go through.
+UPSCALERS = {
+    "seedvr2": {"label": "SeedVR2 3B"},
+    "flashvsr": {"label": "FlashVSR v1.1"},
+}
 # Target short side of each upscale choice.
 UPSCALE_TARGETS = {"1080p": 1080, "1440p": 1440}
 
@@ -198,7 +212,11 @@ def music_model_info():
             "sampler": MUSIC["sampler"], "cfg": MUSIC["cfg"], "text_encoder": MUSIC_CLIP}
 
 
-def upscale_model_info():
+def upscale_model_info(upscaler="seedvr2"):
+    """What an upscale job runs on, as shown to users."""
+    if upscaler == "flashvsr":
+        return {"unet": "flashvsr_v1.1_dit_int8_convrot", "lora": None, "lora_strength": None, "steps": 1,
+                "sampler": None, "vae": "TCDecoder"}
     return {"unet": SEEDVR2_UNET, "lora": None, "lora_strength": None, "steps": UPSCALE["steps"],
             "sampler": UPSCALE["sampler"], "vae": SEEDVR2_VAE}
 
@@ -256,6 +274,7 @@ class H3Engine:
         self._moss = None
         self._music = None
         self._seedvr2 = None
+        self._flashvsr = None
         self._cancel = False
 
     def bootstrap(self):
@@ -691,6 +710,75 @@ class H3Engine:
                      for i, n in enumerate(names)}
         return {"frames": int(images.shape[0]), "chunks": len(chunks), "steps": UPSCALE["steps"],
                 "timings": durations, "models": upscale_model_info()}
+
+    def _flashvsr_runtime(self):
+        """The FlashVSR+ node's comfy_runtime module, imported once from custom_nodes as a package."""
+        import importlib
+        import importlib.util
+
+        name = "flashvsr_plus_t8"
+        if name not in sys.modules:
+            node = Path(self.comfyui_path) / "custom_nodes" / FLASHVSR_NODE
+            spec = importlib.util.spec_from_file_location(name, node / "flashvsr_plus" / "__init__.py",
+                                                          submodule_search_locations=[str(node / "flashvsr_plus")])
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+        return importlib.import_module(f"{name}.comfy_runtime")
+
+    def flashvsr_video(self, *, source_path, width, height, seed, video_path, thumb_path, on_progress):
+        """Upscale a finished video to width×height with FlashVSR v1.1, keeping its audio and frame rate."""
+        import re
+        import av
+
+        runtime = self._flashvsr_runtime()
+        self._cancel = False
+        self.mm.interrupt_current_processing(False)
+        on_progress("loading", 0.0)
+        start = time.perf_counter()
+        if self._flashvsr is None:
+            self._flashvsr = runtime.ModelHandle(
+                **FLASHVSR, directory=Path(self.comfyui_path) / "models" / FLASHVSR_DIR, auto_download=False,
+                keep_loaded=True, device=str(self.mm.get_torch_device()))
+        with av.open(str(source_path)) as container:
+            stream = container.streams.video[0]
+            source_w, source_h, fps = stream.codec_context.width, stream.codec_context.height, float(stream.average_rate)
+        width, height, canvas_w, canvas_h = runtime.geometry(source_w, source_h, 1.0, width, height)
+
+        def progress(message):
+            match = re.match(r"DiT chunk (\d+)/(\d+)", message)
+            if match:
+                on_progress("upscaling", int(match[1]) / int(match[2]))
+
+        request = runtime.InferenceRequest(input_path=str(source_path), output_path=str(video_path),
+                                           height=canvas_h, width=canvas_w, content_height=height,
+                                           content_width=width, fps=fps)
+        try:
+            result = self._flashvsr.infer(request, seed=int(seed), options=runtime.Options(), progress=progress,
+                                          interrupt=self.mm.throw_exception_if_processing_interrupted)
+        except self.mm.InterruptProcessingException:
+            raise Canceled()
+        finally:
+            self.mm.interrupt_current_processing(False)
+        on_progress("saving", 0.0)
+        frames = self._thumb_from_video(video_path, thumb_path)
+        return {"frames": frames, "steps": 1, "timings": {"upscaling": round(time.perf_counter() - start, 1)},
+                "backend": result.metadata.get("actual_backend"), "models": upscale_model_info("flashvsr")}
+
+    def _thumb_from_video(self, video_path, thumb_path):
+        """Save the middle frame of a video as its thumbnail; returns the frame count."""
+        import av
+        import torch
+
+        with av.open(str(video_path)) as container:
+            total = container.streams.video[0].frames
+            middle = None
+            for i, frame in enumerate(container.decode(video=0)):
+                if i == total // 2:
+                    middle = frame.to_ndarray(format="rgb24")
+                    break
+        self._save_thumb(torch.from_numpy(middle).float() / 255.0, thumb_path)
+        return total
 
     @staticmethod
     def _save_mp3(audio, path):

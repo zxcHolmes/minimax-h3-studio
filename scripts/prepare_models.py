@@ -26,13 +26,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
 from h3_engine import (  # noqa: E402
-    AUDIO_VAE, CLIP, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
+    AUDIO_VAE, CLIP, FLASHVSR_DIR, FLASHVSR_FILES, FLASHVSR_NODE, FLASHVSR_REPO, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
     MUSIC_VAE, SEEDVR2_REPO, SEEDVR2_UNET, SEEDVR2_VAE, UNETS, VIDEO_VAE,
 )
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale", "flashvsr")
 
 
 def manifest():
@@ -61,6 +61,7 @@ def manifest():
         ("upscale", SEEDVR2_REPO, f"diffusion_models/{SEEDVR2_UNET}", "diffusion_models", SEEDVR2_UNET),
         ("upscale", SEEDVR2_REPO, f"vae/{SEEDVR2_VAE}", "vae", SEEDVR2_VAE),
     ]
+    items += [("flashvsr", FLASHVSR_REPO, name, FLASHVSR_DIR, name) for name in FLASHVSR_FILES]
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
     families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}
     return [(g, repo, path, sub, name, families.get(name)) for g, repo, path, sub, name in items]
@@ -140,6 +141,9 @@ def main():
     if "larryvrh" not in args.skip and not (Path(args.comfyui).expanduser() / LARRYVRH_NODE).is_dir():
         print(f"\nnote: the larryvrh LoRA also needs its ComfyUI node:\n"
               f"    git clone https://github.com/larryvrh/ComfyUI-MiniMax-H3-Turbo {args.comfyui}/{LARRYVRH_NODE}")
+    if "flashvsr" not in args.skip and not (Path(args.comfyui).expanduser() / "custom_nodes" / FLASHVSR_NODE).is_dir():
+        print(f"\nnote: FlashVSR upscaling also needs its ComfyUI node:\n"
+              f"    git clone https://github.com/T8mars/{FLASHVSR_NODE} {args.comfyui}/custom_nodes/{FLASHVSR_NODE}")
     if failed:
         print(f"\n{len(failed)} download(s) failed: {', '.join(failed)}; rerun to resume.")
         sys.exit(1)

@@ -6,7 +6,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
 - **Picture generation** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), for making reference images and first frames; a finished picture goes into a video job with one click.
 - **Music generation** with [MiniMax Music 3](https://huggingface.co/Comfy-Org/MiniMax-Music-3): songs up to 5 minutes from a caption and lyrics.
-- **Upscaling** finished videos to 1080p or 1440p with [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
+- **Upscaling** finished videos to 1080p or 1440p with [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) (fast) or [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
 - **Guide audio** for video jobs: anchor a slice of a song or recording as the shot's soundtrack, so singing, speech and motion follow it (music videos, lip sync).
 - FastVideo's distilled [FastH3](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy) 8-step checkpoints as a second model group that runs without a LoRA.
 - Weights stay loaded between jobs; jobs run one at a time from a persistent queue.
@@ -27,6 +27,7 @@ On an RTX 4090 a 5-second clip with sound takes about 30–45 s at 544p and 65�
 - `python3`, `curl` and `rsync`.
 - Optional, about 2× faster: `triton` and `sageattention` in the ComfyUI environment (enabled through `H3_COMFY_ARGS`).
 - Optional, for the larryvrh LoRA: its ComfyUI node, `git clone https://github.com/larryvrh/ComfyUI-MiniMax-H3-Turbo <ComfyUI>/custom_nodes/ComfyUI-MiniMax-H3-Turbo`.
+- Optional, for FlashVSR upscaling: T8star's FlashVSR+ node, `git clone https://github.com/T8mars/Comfyui-Flashvsr-Plus-T8 <ComfyUI>/custom_nodes/Comfyui-Flashvsr-Plus-T8` (developed against commit `ac60d1e`; its requirements are already in a ComfyUI environment).
 
 **Your machine** (where you deploy from): Node.js 18+, `ssh` with key-based login to the GPU machine, `rsync`, and `scp`.
 
@@ -163,6 +164,7 @@ Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth
 | `minimax_music3_dav` (music VAE) | `vae` | Comfy-Org/MiniMax-Music-3 | 0.22 GB |
 | `seedvr2_3b_int8_convrot` (upscaling) | `diffusion_models` | Comfy-Org/SeedVR2 | 3.2 GB |
 | `seedvr2_ema_vae_fp16` (upscaling VAE) | `vae` | Comfy-Org/SeedVR2 | 0.48 GB |
+| `v1/dit_int8_convrot`, `v1/LQ_proj_in.ckpt`, `TCDecoder.ckpt` (FlashVSR v1.1) | `flashvsr_plus` | t8star/Flashvsr-Plus-Comfy | 2.2 GB |
 
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
@@ -211,7 +213,10 @@ Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base;
 
 ![Music mode with lyrics and the length warning](doc/screenshots/music.webp)
 
-**Upscaling**: a finished video's **Upscale** button offers the targets above its size (short side 1080 or 1440 px) and queues a new job that runs SeedVR2 3B (int8) with the settings of ComfyUI's SeedVR2 video upscale template: a lanczos resize to the target, one euler step, tiled VAE encode and decode, no color correction. The clip is sampled in temporal chunks sized to the free VRAM, two latent frames overlapping and crossfaded, where the template samples it whole. The audio and frame rate are copied from the source. H3 already produces 768p natively; upscaling adds sharpness, it does not add content. The first upscale job also loads the SeedVR2 models, which then stay resident.
+**Upscaling**: a finished video's **Upscale** button opens a menu of upscalers and the targets above the video's size (short side 1080 or 1440 px) and queues a new job; the audio and frame rate are copied from the source. H3 already produces 768p natively; upscaling adds sharpness, it does not add content.
+
+- **FlashVSR v1.1** (int8 DiT, Tiny decoder, Triton block-sparse attention) through T8star's FlashVSR+ node, which streams the clip in chunks. A 10.8 s 768p clip to 1080p took 87 s on the 4090, including the first model load. Its detail is the sharpest, but texture can shimmer on camera moves.
+- **SeedVR2 3B** (int8) with the settings of ComfyUI's SeedVR2 video upscale template: a lanczos resize to the target, one euler step, no color correction. The same clip took 272 s, almost all of it in SeedVR2's own VAE (69 s encode, 161 s decode, 19 s sampling). The clip is sampled in temporal chunks sized to the free VRAM, two latent frames overlapping and crossfaded, where the template samples it whole, and the VAE runs whole frames instead of the template's 512 px tiles, which nearly doubled its work (the same clip took 510 s with them).
 
 To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
@@ -243,7 +248,7 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 | POST | `/api/jobs` | create a job (multipart form, below) |
 | GET | `/api/jobs/{id}` | one job |
 | POST | `/api/jobs/{id}/cancel` | cancel a queued or running job |
-| POST | `/api/jobs/{id}/upscale` | queue a SeedVR2 upscale of a finished video (form field `target`: `1080p` / `1440p`, optional `seed`) |
+| POST | `/api/jobs/{id}/upscale` | queue an upscale of a finished video (form fields `upscaler`: `flashvsr` / `seedvr2`, default `seedvr2`; `target`: `1080p` / `1440p`; optional `seed`) |
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 
 `POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh and FastH3), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
@@ -252,7 +257,7 @@ A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `s
 
 A music job sends `kind=music` with `prompt` (the caption), `lyrics` (optional), `duration` (maximum length, 10–300 s, default 120) and `seed` (optional). The finished job has `audio_url`; `result.seconds` is the actual length.
 
-An upscale job (mode `upscale`) has `source` (the source job's id), `preset` (the target) and the source's prompt; the finished job has its own `video_url`.
+An upscale job (mode `upscale`) has `source` (the source job's id), `upscaler`, `preset` (the target) and the source's prompt; the finished job has its own `video_url`.
 
 ```bash
 curl -F resolution=544p -F duration=5 -F aspect_ratio=16:9 \

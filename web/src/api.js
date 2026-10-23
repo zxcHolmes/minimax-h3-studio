@@ -17,8 +17,9 @@ export const api = {
   },
   create: (form) => request('POST', '/api/jobs', form),
   cancel: (id) => request('POST', `/api/jobs/${id}/cancel`),
-  upscale: (id, target) => {
+  upscale: (id, upscaler, target) => {
     const form = new FormData()
+    form.append('upscaler', upscaler)
     form.append('target', target)
     return request('POST', `/api/jobs/${id}/upscale`, form)
   },

@@ -23,7 +23,7 @@ from aiohttp import web
 
 from h3_engine import (
     ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
-    RESOLUTIONS, SAMPLERS, STEPS_RANGE, UPSCALE_TARGETS, Canceled, H3Engine, canvas_size, fixed_sampling,
+    RESOLUTIONS, SAMPLERS, STEPS_RANGE, UPSCALE_TARGETS, UPSCALERS, Canceled, H3Engine, canvas_size, fixed_sampling,
     image_model_info, image_size, model_info, music_model_info, upscale_model_info, upscale_size, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
@@ -114,7 +114,8 @@ class Worker(threading.Thread):
                 source = self.store.get(job["source"])
                 if not source or not source["video"] or not (VIDEOS / source["video"]).is_file():
                     raise ValueError("the source video has been deleted")
-                result = self.engine.upscale_video(
+                upscale = self.engine.flashvsr_video if job["upscaler"] == "flashvsr" else self.engine.upscale_video
+                result = upscale(
                     source_path=VIDEOS / source["video"], width=job["width"], height=job["height"], seed=job["seed"],
                     video_path=VIDEOS / video, thumb_path=THUMBS / thumb, on_progress=on_progress)
                 self.store.update(job_id, status="done", stage="done", progress=1.0, video=video, thumb=thumb,
@@ -158,7 +159,7 @@ def job_view(job, positions):
     elif job["mode"] == "t2m":
         view["models"] = stored or music_model_info()
     elif job["mode"] == "upscale":
-        view["models"] = stored or upscale_model_info()
+        view["models"] = stored or upscale_model_info(job["upscaler"] or "seedvr2")
     else:
         view["models"] = stored or (model_info(job["lora"], job_strength(job), job["sampler"], job["steps"])
                                     if job["lora"] in LORAS else None)
@@ -199,7 +200,9 @@ async def presets(request):
         "steps_range": STEPS_RANGE,
         "image": {"sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()}, "models": image_model_info()},
         "music": {"duration_range": MUSIC_DURATION_RANGE, "default_duration": 120, "models": music_model_info()},
-        "upscale": {"targets": list(UPSCALE_TARGETS), "models": upscale_model_info()},
+        "upscale": {"targets": list(UPSCALE_TARGETS),
+                    "upscalers": [{"id": k, "label": v["label"], "models": upscale_model_info(k)}
+                                  for k, v in UPSCALERS.items()]},
     })
 
 
@@ -374,7 +377,7 @@ async def create_job(request):
 
 
 async def upscale_job(request):
-    """Queue a SeedVR2 upscale of a finished video job; the new job keeps the source's prompt for display."""
+    """Queue an upscale of a finished video job; the new job keeps the source's prompt for display."""
     store, worker = request.app["store"], request.app["worker"]
     source = store.get(request.match_info["id"])
     if not source:
@@ -383,6 +386,9 @@ async def upscale_job(request):
     target = form.get("target") or "1080p"
     if target not in UPSCALE_TARGETS:
         return bad_request(f"target must be one of {', '.join(UPSCALE_TARGETS)}")
+    upscaler = form.get("upscaler") or "seedvr2"
+    if upscaler not in UPSCALERS:
+        return bad_request(f"upscaler must be one of {', '.join(UPSCALERS)}")
     if source["status"] != "done" or not source["video"]:
         return bad_request("only finished videos can be upscaled")
     if min(source["width"], source["height"]) >= UPSCALE_TARGETS[target]:
@@ -390,7 +396,7 @@ async def upscale_job(request):
     width, height = upscale_size(source["width"], source["height"], target)
     raw_seed = (form.get("seed") or "").strip()
     seed = int(raw_seed) % MAX_SEED if raw_seed.lstrip("-").isdigit() else random.randrange(MAX_SEED)
-    job = store.create(mode="upscale", source=source["id"], preset=target, prompt=source["prompt"], width=width,
+    job = store.create(mode="upscale", source=source["id"], upscaler=upscaler, preset=target, prompt=source["prompt"], width=width,
                        height=height, duration=source["duration"], seed=seed, refs=[])
     if worker.state == "ready":
         worker.queue.put(job["id"])
