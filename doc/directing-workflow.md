@@ -290,9 +290,10 @@ builder before the next batch, and note the change in `00_project.md`.
 
 ## Step 9: assembly
 
-Shots come out at very different loudness (about −35 to −15 dB mean). Normalise each shot, reset timestamps
-so the result is constant 24 fps, pad or trim each audio track to its video length, and add tiny fades to
-avoid clicks at the cuts. `scripts/assemble.sh <out.mp4> <clip>...`:
+Join the shots without touching their sound: no loudness normalisation and no fades. Normalising each shot
+(`loudnorm`) lifted the noise floor of quiet shots into an audible hiss. Only reset timestamps so the result is
+constant 24 fps, and pad or trim each audio track to its video length so the cuts stay in sync.
+`scripts/assemble.sh <out.mp4> <clip>...`:
 
 ```bash
 #!/usr/bin/env bash
@@ -302,15 +303,16 @@ ins=""; fc=""; maps=""; i=0
 for f in "$@"; do
   ins="$ins -i $f"
   d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")
-  fc="$fc[$i:v]setpts=N/24/TB,setsar=1[v$i];"
-  fc="$fc[$i:a]asetpts=PTS-STARTPTS,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,"
-  fc="${fc}apad=whole_dur=$d,atrim=0:$d,afade=t=in:d=0.05,afade=t=out:st=$(python3 -c "print($d-0.08)"):d=0.08[a$i];"
+  fc="$fc[$i:v]setpts=N/24/TB,setsar=1[v$i];[$i:a]asetpts=PTS-STARTPTS,apad=whole_dur=$d,atrim=0:$d[a$i];"
   maps="$maps[v$i][a$i]"; i=$((i+1))
 done
 ffmpeg -y $ins -filter_complex "${fc}${maps}concat=n=$i:v=1:a=1[v][a]" -map "[v]" -map "[a]" \
   -fps_mode cfr -r 24 -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -c:a aac -b:a 192k \
   -movflags +faststart "$out"
 ```
+
+Do not join with the concat demuxer and `-c copy` instead: it keeps each clip's AAC priming, and the sound
+drifted 30–85 ms late against the picture.
 
 Verify with `ffprobe -count_frames`: the frame count equals the sum of the shots, `avg_frame_rate` is exactly
 24/1, and audio and video durations match. Without `setpts=N/24/TB` and `-fps_mode cfr` the concat output had
@@ -374,14 +376,18 @@ The picture never carries captions, but the finished MP4 gets a soft subtitle tr
 
 1. Free the GPU: `curl -X POST http://<host>:8190/api/unload` (refused with 409 while a job runs or waits; the next
    job reloads its models). Without it the H3 models keep ~23 GB of the 24 GB card after a job.
-2. Transcribe on the GPU box in its `whisper` conda env with faster-whisper `large-v3` (cached), language set,
-   `vad_filter=True`, and an `initial_prompt` listing the names and foreign words of the piece. With the GPU
-   freed use `device="cuda", compute_type="float16"`; `device="cpu", compute_type="int8"` also works (an 8-minute
-   film took a few minutes on 24 cores).
-3. Clean the SRT against the script: fix misheard words and names (it heard "necklace" as "checklist"), keep what
-   the voices actually said where they departed from the script, merge fragments into sentences, wrap at about
-   42 characters per line, and pull in cues whose start VAD stretched seconds before the words. Reading the
-   transcript is also the best check that no line was cut off.
+2. Transcribe each shot's clip separately, not the assembled film, on the GPU box in its `whisper` conda env:
+   faster-whisper `large-v3` (cached), `device="cuda", compute_type="float16"`, language set, `vad_filter=True`,
+   `word_timestamps=True`, `condition_on_previous_text=False`, and an `initial_prompt` listing the names and
+   foreign words of the piece. The 36 shots of an 8-minute film took well under a minute. On the whole film the
+   timestamps drifted up to 2 s late or early and words bled across cuts (one shot's line was heard as the
+   next shot's narration); per shot, the word counts matched the script almost exactly.
+3. Build the cues from word timings: offset each shot's words by the shot's start in the film (the sum of the
+   frame counts before it at 24 fps), split at sentence ends, pauses over 0.7 s or about 84 characters, never
+   across a cut, and wrap at about 42 characters per line. Drop zero-length words (whisper filling silence) and
+   pull a sentence's first word up against the next word when it is stamped seconds early. Fix misheard words
+   and names against the script ("necklace" came out as "checklist") and spell out numbers. Reading the result
+   is also the best check that no line was cut off.
 4. Mux it without re-encoding:
 
 ```bash
