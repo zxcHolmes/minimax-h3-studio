@@ -285,6 +285,8 @@ It also takes `--first-frame`, `--last-frame`, repeated `--ref-image`, `--jobs-j
 
 [doc/directing-workflow.md](doc/directing-workflow.md) describes how an agent such as Claude Code directs a multi-shot production of any genre (animated series, drama, documentary, talking head, commercial, MV) through the HTTP API: a cast and voice bible with fixed looks and voices, casting clips that provide reference images, storyboards planned in ~2-minute batches that the user approves one at a time, reference-mode shots that keep characters consistent, QC, and assembling the result with ffmpeg.
 
+[doc/novel-adaptation-workflow.md](doc/novel-adaptation-workflow.md) extends it to a series adapted from a novel (epub or txt): splitting the book into chapters, a read-through saved as chapter notes, a character and voice bible kept as the single source across episodes, a season plan, and a progress file so the work can be resumed episode by episode in later sessions.
+
 ## Development
 
 ```bash
