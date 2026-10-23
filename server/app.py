@@ -8,6 +8,8 @@ Environment:
     H3_COMFY_ARGS  extra ComfyUI CLI flags     (default triton + sage attention)
 """
 
+import asyncio
+import concurrent.futures
 import io
 import logging
 import os
@@ -73,7 +75,24 @@ class Worker(threading.Thread):
         for job_id in self.store.queued_ids():
             self.queue.put(job_id)
         while True:
-            self._run_one(self.queue.get())
+            item = self.queue.get()
+            if callable(item):
+                item()
+            else:
+                self._run_one(item)
+
+    def call(self, fn):
+        """Run fn on the worker thread after the jobs queued before it; returns a concurrent Future."""
+        future = concurrent.futures.Future()
+
+        def task():
+            try:
+                future.set_result(fn())
+            except Exception as exc:
+                future.set_exception(exc)
+
+        self.queue.put(task)
+        return future
 
     def _run_one(self, job_id):
         job = self.store.get(job_id)
@@ -432,6 +451,18 @@ async def cancel_job(request):
     return web.json_response({"ok": True})
 
 
+async def unload(request):
+    """Free the GPU for another program while idle; the next job reloads its models."""
+    store, worker = request.app["store"], request.app["worker"]
+    if worker.state != "ready":
+        return web.json_response({"error": f"the engine is {worker.state}"}, status=503)
+    if worker.running_id or store.queued_ids():
+        return web.json_response({"error": "jobs are running or queued"}, status=409)
+    result = await asyncio.wrap_future(worker.call(worker.engine.unload))
+    log.info("models unloaded %s", result)
+    return web.json_response(result)
+
+
 async def delete_job(request):
     store = request.app["store"]
     job = store.get(request.match_info["id"])
@@ -475,6 +506,7 @@ def make_app():
     app.router.add_get("/api/jobs/{id}", get_job)
     app.router.add_post("/api/jobs/{id}/cancel", cancel_job)
     app.router.add_post("/api/jobs/{id}/upscale", upscale_job)
+    app.router.add_post("/api/unload", unload)
     app.router.add_delete("/api/jobs/{id}", delete_job)
     app.router.add_static("/files/videos", VIDEOS)
     app.router.add_static("/files/pictures", PICTURES)

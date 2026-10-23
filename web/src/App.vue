@@ -50,6 +50,7 @@ const status = computed(() => {
   if (h.state === 'loading') return { text: 'Loading models', tone: 'busy' }
   if (h.state === 'error') return { text: 'Models failed to load', tone: 'bad' }
   if (h.running) return { text: h.queued ? `Generating, ${h.queued} queued` : 'Generating', tone: 'busy' }
+  if (!h.unet) return { text: 'Idle · models unloaded', tone: 'idle' }
   return { text: h.family === 'ref2va' ? 'Idle · reference model' : 'Idle', tone: 'idle' }
 })
 

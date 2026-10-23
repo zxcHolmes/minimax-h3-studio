@@ -343,6 +343,20 @@ class H3Engine:
                 self._lora_model(key)
         return True
 
+    def unload(self):
+        """Free the VRAM for another program: drop the base DiT, its clones and the lazily loaded models, and move
+        everything else off the GPU. The next job reloads what it needs. Call from the worker thread when idle."""
+        import torch
+
+        self._models.clear()
+        self.base = self.unet = self.family = None
+        self._moss = self._music = self._seedvr2 = self._flashvsr = None
+        self.mm.unload_all_models()
+        gc.collect()
+        self.mm.soft_empty_cache()
+        free, total = torch.cuda.mem_get_info()
+        return {"vram_free_mb": free // 2 ** 20, "vram_total_mb": total // 2 ** 20}
+
     def _lora_model(self, key, strength=1.0):
         """(model, sigmas, sampler) for a model choice at a LoRA strength on the resident DiT."""
         if (key, strength) not in self._models:
