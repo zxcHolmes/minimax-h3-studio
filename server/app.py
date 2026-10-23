@@ -23,8 +23,8 @@ from aiohttp import web
 
 from h3_engine import (
     ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
-    RESOLUTIONS, SAMPLERS, STEPS_RANGE, Canceled, H3Engine, canvas_size, image_model_info, image_size, model_info,
-    music_model_info, with_keyframe_prefix,
+    RESOLUTIONS, SAMPLERS, STEPS_RANGE, Canceled, H3Engine, canvas_size, fixed_sampling, image_model_info, image_size,
+    model_info, music_model_info, with_keyframe_prefix,
 )
 from h3_jobs import ACTIVE, JobStore
 
@@ -176,7 +176,7 @@ async def presets(request):
                         for k in RESOLUTIONS],
         "groups": [{"id": k, "label": v} for k, v in GROUPS.items()],
         "loras": [{"id": k, "group": v["group"], "family": v["family"], "label": v["label"], "steps": v["steps"],
-                   "resolutions": v["resolutions"], "models": model_info(k)} for k, v in LORAS.items()],
+                   "fixed": fixed_sampling(k), "resolutions": v["resolutions"], "models": model_info(k)} for k, v in LORAS.items()],
         "default_loras": DEFAULT_LORAS,
         "aspect_ratios": list(ASPECT_RATIOS),
         "duration_range": DURATION_RANGE,
@@ -316,15 +316,15 @@ async def create_job(request):
     sampler = form.get("sampler") or None
     if sampler and sampler not in SAMPLERS:
         return bad_request(f"sampler must be one of {', '.join(SAMPLERS)}")
-    if LORAS[lora]["loader"] == "larryvrh" or sampler == LORAS[lora].get("sampler", "euler"):
-        sampler = None  # larryvrh has its own sampler; the model choice's own needs no override
+    if fixed_sampling(lora) or sampler == LORAS[lora].get("sampler", "euler"):
+        sampler = None  # larryvrh and FastH3 keep their own sampler; the model choice's own needs no override
     try:
         steps = int(form.get("steps") or 0) or None
     except ValueError:
         return bad_request("steps must be an integer")
     if steps and not STEPS_RANGE[0] <= steps <= STEPS_RANGE[1]:
         return bad_request(f"steps must be within {STEPS_RANGE}")
-    if steps == LORAS[lora]["steps"]:
+    if steps == LORAS[lora]["steps"] or fixed_sampling(lora):
         steps = None
 
     def save(upload):

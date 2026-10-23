@@ -46,7 +46,7 @@ def parse_args():
     p.add_argument("--duration", type=float, default=5.0, help="Seconds; snapped up to the 17k+5 frame grid")
     p.add_argument("--unet", default=None, help="Diffusion model in models/diffusion_models (default depends on task)")
     p.add_argument("--clip", default="qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors")
-    p.add_argument("--vae", default="minimax_h3_video_vae_fp16.safetensors")
+    p.add_argument("--vae", default="minimax_h3_video_vae_int8_convrot.safetensors")
     p.add_argument("--audio-vae", default="minimax_h3_audio_vae_fp32.safetensors")
     p.add_argument("--lora", default="minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
                    help="LoRA in models/loras; pass 'none' for the base model")

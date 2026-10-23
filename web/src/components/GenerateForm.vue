@@ -134,8 +134,8 @@ watch([loraOptions, recommended], () => {
   if (loraOptions.value.length && !loraOptions.value.some((l) => l.id === lora.value)) lora.value = recommended.value
 }, { immediate: true })
 const currentLora = computed(() => props.loras?.find((l) => l.id === lora.value))
-// larryvrh runs its own turbo sampler, which is not in the list.
-const samplerChoosable = computed(() => !!currentLora.value && (props.samplers || []).includes(currentLora.value.models.sampler))
+// larryvrh and FastH3 keep the sampler they were distilled for.
+const samplerChoosable = computed(() => !!currentLora.value && !currentLora.value.fixed && (props.samplers || []).includes(currentLora.value.models.sampler))
 const effectiveSampler = computed(() => (samplerChoosable.value && sampler.value) || currentLora.value?.models.sampler)
 
 function assemble(s) {

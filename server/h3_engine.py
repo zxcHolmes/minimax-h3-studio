@@ -37,7 +37,9 @@ GROUPS = {
 # one was trained or tested; `source` / `unet_source` are the Hugging Face repos
 # scripts/prepare_models.py downloads from. The shift has to match the checkpoint.
 # `vsa` turns on comfy_kitchen attention plus Video Sparse Attention as in the FastH3
-# ComfyUI templates. Reference jobs run on FastH3 OmniRef only: the 4-step ref2v LoRAs
+# ComfyUI templates. `fixed` keeps the template's sampler and steps whatever a job asks: FastH3 V2 is
+# distilled on a fixed 8-rung ladder and OmniRef fuses 4 of its 32 PDD output heads per Euler step,
+# so another sampler or step count leaves what they were trained for. Reference jobs run on FastH3 OmniRef only: the 4-step ref2v LoRAs
 # smeared large motion into streaks even at 6-8 steps.
 LORAS = {
     "lightx2v-8step-v1.0": {
@@ -61,14 +63,14 @@ LORAS = {
         "group": "fasth3", "family": "fl2va", "label": "FastH3 V2 8-step", "loader": "none", "file": None,
         "unet": "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
         "unet_source": "FastVideo/FastVideo-FastH3-Comfy", "sampler": "res_multistep",
-        "steps": 8, "shift_video": 10.0, "shift_audio": 3.0, "vsa": {"keep": 10, "start": 0.2},
+        "steps": 8, "shift_video": 10.0, "shift_audio": 3.0, "vsa": {"keep": 10, "start": 0.2}, "fixed": True,
         "resolutions": ["544p", "768p"],
     },
     "fasth3-omniref": {
         "group": "fasth3", "family": "ref2va", "label": "FastH3 OmniRef 8-step", "loader": "none", "file": None,
         "unet": "fasth3_omniref_8step_pruned_int8_convrot.safetensors",
         "unet_source": "FastVideo/FastH3-Omni-Comfy", "sampler": "euler",
-        "steps": 8, "shift_video": 12.0, "shift_audio": 3.0, "vsa": {"keep": 10, "start": 0.0},
+        "steps": 8, "shift_video": 12.0, "shift_audio": 3.0, "vsa": {"keep": 10, "start": 0.0}, "fixed": True,
         "resolutions": ["544p", "768p"],
     },
 }
@@ -96,7 +98,7 @@ UNETS = {
 }
 MAX_REFS = 6
 CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
-VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
+VIDEO_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 
 # Picture generation: MOSS-Image SFT with the settings of ComfyUI's MOSS-Image text-to-image template.
@@ -147,12 +149,18 @@ def unet_file(lora):
     return p.get("unet") or UNETS[p["family"]]
 
 
+def fixed_sampling(lora):
+    """Whether a model choice ignores a job's sampler and steps: larryvrh's turbo sampler and the FastH3 bases."""
+    p = LORAS[lora]
+    return p["loader"] == "larryvrh" or p.get("fixed", False)
+
+
 def sampler_name(lora, sampler=None):
     """The sampler a job runs: its own pick, else the model choice's. larryvrh always uses its turbo sampler."""
     p = LORAS[lora]
     if p["loader"] == "larryvrh":
         return "larryvrh turbo"
-    return sampler or p.get("sampler", "euler")
+    return (not fixed_sampling(lora) and sampler) or p.get("sampler", "euler")
 
 
 def model_info(lora, strength=1.0, sampler=None, steps=None):
@@ -160,7 +168,7 @@ def model_info(lora, strength=1.0, sampler=None, steps=None):
     p = LORAS[lora]
     vsa = p.get("vsa")
     return {"unet": unet_file(lora), "lora": p["file"], "lora_strength": strength if p["file"] else None,
-            "steps": steps or p["steps"],
+            "steps": (not p.get("fixed") and steps) or p["steps"],
             "sampler": sampler_name(lora, sampler),
             "shift_video": p["shift_video"], "shift_audio": p["shift_audio"],
             "attention": f"VSA {vsa['keep']}%" if vsa else None}
@@ -363,7 +371,9 @@ class H3Engine:
             timings["loading"] = time.perf_counter()
             self._use_base(lora)
         model, sigmas, ksampler = self._lora_model(lora, lora_strength)
-        if sampler and LORAS[lora]["loader"] != "larryvrh":
+        if fixed_sampling(lora):
+            sampler = steps = None  # jobs queued before a model choice became fixed
+        if sampler:
             ksampler = self._sampler(sampler)
         if steps and steps != LORAS[lora]["steps"]:
             sigmas = self.n["BasicScheduler"].execute(model, "simple", steps, 1.0)[0]
