@@ -78,6 +78,9 @@ outputs/<title>/
   scripts/                  prompts.py (prompt builder), studio.py (submit/wait/download), assemble.sh, jobs.json
   batch01.mp4 ...           batch preview videos for the user
   <title>.mp4               the finished production
+  cover.png                 the poster cover with the title (MOSS-Image); cover/ holds the candidates
+  publish.md                title, description and hashtags for publishing
+  subs/                     the transcript and the cleaned SRT muxed into <title>.mp4 as a soft track
 ```
 
 Write the docs in the user's language. Build every prompt with a script instead of typing it per job: the
@@ -258,13 +261,18 @@ ffmpeg -i clips/S04.mp4 -af volumedetect -vn -f null - 2>&1 | grep -E "mean_volu
 
 Check the duration, that the cast matches the references (marks, colours, costume), that the action follows
 the beats, that there is no broken anatomy and **no burned-in text**, and that the audio track is present.
-Note small drifts in the log instead of redoing.
+Keep the redo rate low: one take per shot, and redo only for severe breaks, once, taking the first acceptable
+take. Severe means burned-in subtitles, a wrong or duplicated main character, broken anatomy, the story's key
+action missing, or a long cut to a plain casting backdrop. Costume drift, a brief cutaway, small prop errors and
+a weak beat go in the log, not back in the queue. Do not cancel a running job to save time: cancelling the job
+on the GPU has crashed the server (it restarts and the queue survives, but the running job is lost).
 
 Burned-in captions are the most common failure in Chinese-dialogue shots, especially period pieces: in one
 series 5 of 10 first takes had Chinese subtitles along the bottom (y ≈ 469–509), and stronger "no subtitles"
 wording barely helped. Narration-only shots with nobody speaking on screen were clean. So:
 
-- Submit dialogue-heavy shots twice from the start and keep the clean take.
+- If a production's first takes show captions often, submit its dialogue-heavy shots twice and keep the clean
+  take.
 - Last resort: crop the caption band and scale back (`crop=816:462:72:0,scale=960:544`).
 
 Redo a shot by resubmitting the same prompt with a new random seed, or rewrite its beats if the model keeps
@@ -309,8 +317,79 @@ Verify with `ffprobe -count_frames`: the frame count equals the sum of the shots
 a variable frame rate and drifted 0.75 s longer than its frames.
 
 When every batch is approved, assemble all shots in order (not the batch previews, to avoid re-encoding twice)
-into `<title>.mp4` and report it the same way. Optionally upscale the finished shots through
+into `<title>.mp4`, make the cover and `publish.md` (Step 10), and report them the same way. Optionally upscale the finished shots through
 `POST /api/jobs/{id}/upscale` before the final assembly if the user wants a higher resolution.
+
+## Step 10: cover and publish notes
+
+Every finished production gets a cover image and a `publish.md`, both in the production folder next to
+`<title>.mp4`.
+
+**Cover.** The cover is a movie poster with the title on it, made with the Studio's picture model (MOSS-Image,
+which renders lettering): a `kind=image` job in the film's aspect ratio (16:9 gives 1360×768). Write the prompt
+as one poster, not a shot: "A classic theatrical movie poster", the production's style line without its
+no-text clause, the leads' fixed looks, the defining moment or object of the story, then a typography sentence
+that quotes every piece of text exactly and ends with "No other text", for example:
+
+> Typography: at the top center, a large elegant engraved gold serif title that reads exactly "THE NECKLACE".
+> At the bottom center, a small refined line of gold serif text that reads exactly "after Guy de Maupassant".
+> No other text.
+
+Keep the text short (title plus at most one credit line) and in the production's language.
+
+```bash
+curl -s -X POST http://<host>:8190/api/jobs \
+  -F kind=image -F "prompt=<prompts/cover.txt" -F aspect_ratio=16:9
+```
+
+Submit three or four with random seeds, download each `picture_url` to `cover/`, look at them, and copy the
+best to `cover.png`. Check the spelling of every word letter by letter, the faces against the references, the
+costume and colours, the key object, and that there is no stray extra lettering. The picture model takes looks
+literally: "red work-roughened hands" from a character bible came out as bloody hands, so soften such phrases in
+the cover prompt ("rough, work-worn hands"). Record the job ids and seeds in the final log.
+
+**publish.md.** Write it in the production's language, and add a second version in the user's language when
+the two differ:
+
+```markdown
+# Publish notes: <title>
+
+- Video: <title>.mp4 (length, resolution)
+- Cover: cover.png
+
+## Title
+<one line, under ~40 characters>
+
+## Description
+<two to four sentences: the hook of the story without giving away the ending, the source work and author for
+an adaptation, and a line saying it was made with AI video generation>
+
+## Hashtags
+#... (8–12 tags: the work and author, the genre, the style, the mood, AI video tags)
+```
+
+## Step 11: soft subtitles
+
+The picture never carries captions, but the finished MP4 gets a soft subtitle track the viewer can switch off.
+
+1. Free the GPU: `curl -X POST http://<host>:8190/api/unload` (refused with 409 while a job runs or waits; the next
+   job reloads its models). Without it the H3 models keep ~23 GB of the 24 GB card after a job.
+2. Transcribe on the GPU box in its `whisper` conda env with faster-whisper `large-v3` (cached), language set,
+   `vad_filter=True`, and an `initial_prompt` listing the names and foreign words of the piece. With the GPU
+   freed use `device="cuda", compute_type="float16"`; `device="cpu", compute_type="int8"` also works (an 8-minute
+   film took a few minutes on 24 cores).
+3. Clean the SRT against the script: fix misheard words and names (it heard "necklace" as "checklist"), keep what
+   the voices actually said where they departed from the script, merge fragments into sentences, wrap at about
+   42 characters per line, and pull in cues whose start VAD stretched seconds before the words. Reading the
+   transcript is also the best check that no line was cut off.
+4. Mux it without re-encoding:
+
+```bash
+ffmpeg -i <title>.mp4 -i subs/<title>.en.srt -map 0:v -map 0:a -map 1 -c:v copy -c:a copy -c:s mov_text \
+  -metadata:s:s:0 language=eng -metadata:s:s:0 title=English -disposition:s:0 default -movflags +faststart out.mp4
+```
+
+Keep the SRT in `subs/` next to the film; platforms that take a separate subtitle file can use it directly.
 
 ## Known limits
 
@@ -319,3 +398,8 @@ into `<title>.mp4` and report it the same way. Optionally upscale the finished s
 - Specific physical actions (a leap from a height, catching an object) are not always followed.
 - Long speech is cut off at the shot end; keep to the pacing budget above.
 - The model sometimes cuts to a closer framing mid-shot by itself; usually acceptable.
+- A reference image carries its costume: when a character changes clothes, write the new costume into every
+  shot, or later shots slip back to the reference's clothes.
+- Dialogue-heavy two-shots can cut away at a line, to another place or to the plain backdrop of the casting
+  reference. Name the location in the first beat and add "The whole shot stays <location> as one continuous
+  two-shot, with no cut to another place or background."
