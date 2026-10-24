@@ -2,9 +2,12 @@
 import { onUnmounted, ref, watch } from 'vue'
 import { PhPlus, PhX } from '@phosphor-icons/vue'
 
-// v-model is a list of { id, file, desc }; position i is <Picture i+1> / <Subject i+1> in the prompt.
+// v-model is a list of { id, file, desc }; position i is <Picture i+1> (or <Video i+1> with `video`) and
+// <Subject first+i> in the prompt.
 const items = defineModel({ type: Array, default: () => [] })
-const props = defineProps({ max: { type: Number, default: 6 } })
+const props = defineProps({ max: { type: Number, default: 6 }, video: Boolean, first: { type: Number, default: 1 } })
+const kind = props.video ? 'video' : 'image'
+const noun = props.video ? 'Video' : 'Picture'
 
 const previews = ref({})
 const dragging = ref(false)
@@ -21,7 +24,7 @@ onUnmounted(() => Object.values(previews.value).forEach((u) => URL.revokeObjectU
 let seq = 0
 function add(files) {
   const room = props.max - items.value.length
-  const picked = [...(files || [])].filter((f) => f.type.startsWith('image/')).slice(0, room)
+  const picked = [...(files || [])].filter((f) => f.type.startsWith(`${kind}/`)).slice(0, room)
   if (picked.length) {
     items.value = [...items.value, ...picked.map((file) => ({ id: `${Date.now()}-${seq++}`, file, desc: '' }))]
   }
@@ -36,8 +39,10 @@ function remove(id) {
   <div class="refs">
     <div v-for="(it, i) in items" :key="it.id" class="ref">
       <div class="thumb">
-        <img :src="previews[it.id]" :alt="`Reference ${i + 1}`" />
-        <span class="badge mono">Picture {{ i + 1 }}</span>
+        <video v-if="video" :src="previews[it.id]" muted loop playsinline preload="metadata"
+          @mouseenter="$event.target.play()" @mouseleave="$event.target.pause()" />
+        <img v-else :src="previews[it.id]" :alt="`Reference ${i + 1}`" />
+        <span class="badge mono">{{ noun }} {{ i + 1 }} · Subject {{ first + i }}</span>
         <button type="button" class="btn icon remove" :aria-label="`Remove reference ${i + 1}`" @click="remove(it.id)">
           <PhX :size="13" weight="bold" />
         </button>
@@ -46,8 +51,8 @@ function remove(id) {
         v-model="it.desc"
         class="input desc"
         type="text"
-        :aria-label="`Subject description for reference ${i + 1}`"
-        placeholder="Describe the subject"
+        :aria-label="`Subject description for reference ${noun.toLowerCase()} ${i + 1}`"
+        :placeholder="video ? 'What it shows, e.g. the jogging man on the beach' : 'Describe the subject'"
       />
     </div>
 
@@ -59,9 +64,9 @@ function remove(id) {
       @dragleave.prevent="dragging = false"
       @drop.prevent="dragging = false; add($event.dataTransfer.files)"
     >
-      <input type="file" accept="image/*" multiple class="sr-only" aria-label="Add reference images" @change="add($event.target.files); $event.target.value = ''" />
+      <input type="file" :accept="`${kind}/*`" multiple class="sr-only" :aria-label="`Add reference ${kind}s`" @change="add($event.target.files); $event.target.value = ''" />
       <PhPlus :size="20" />
-      <span>Add images</span>
+      <span>Add {{ kind }}s</span>
       <span class="count mono">{{ items.length }}/{{ max }}</span>
     </label>
   </div>
@@ -75,7 +80,7 @@ function remove(id) {
 .thumb {
   position: relative; aspect-ratio: 4 / 3; border-radius: var(--r-card); overflow: hidden; background: var(--screen);
 }
-.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb img, .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .badge {
   position: absolute; left: 7px; bottom: 7px; font-size: 10.5px; color: #e9eaee;
   background: rgba(8, 9, 11, .62); border-radius: 999px; padding: 1px 7px;

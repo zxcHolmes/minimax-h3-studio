@@ -136,7 +136,7 @@ onBeforeUnmount(() => observer?.disconnect())
       </details>
 
       <dl class="specs mono">
-        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"> ×{{ job.refs.length }}</template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
+        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"><template v-if="job.refs.length || !job.ref_videos?.length"> ×{{ job.refs.length }}</template><template v-if="job.ref_videos?.length"> + {{ job.ref_videos.length }} video</template></template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
         <div v-if="!isMusic"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
         <div v-if="!isPicture"><dt>Length</dt><dd>{{ clipLength }}</dd></div>
         <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>

@@ -97,6 +97,10 @@ UNETS = {
     "fl2va": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
 }
 MAX_REFS = 6
+# Reference videos (ref2va): the node takes up to 3, 2-15 s at 24 fps. Their tokens join every attention call,
+# so the engine trims them to the job's length and scales them to its pixel area (see _ref_video).
+MAX_REF_VIDEOS = 3
+REF_VIDEO_MIN_SECONDS = 2.0
 CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 VIDEO_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
@@ -412,7 +416,7 @@ class H3Engine:
 
     def generate(self, *, lora, prompt, width, height, duration, seed, lora_strength=1.0, sampler=None, steps=None,
                  image_path=None,
-                 last_image_path=None, ref_paths=(), audio_path=None, audio_start=0.0, video_path, thumb_path,
+                 last_image_path=None, ref_paths=(), ref_video_paths=(), audio_path=None, audio_start=0.0, video_path, thumb_path,
                  on_progress):
         """Run one job; on_progress(stage, fraction) is called from this thread.
 
@@ -454,10 +458,15 @@ class H3Engine:
                 # Keyword arguments: ComfyUI has reordered these node signatures between releases.
                 if family == "ref2va":
                     refs = {f"ref_image_{i}": load_image(p) for i, p in enumerate(ref_paths, 1)}
+                    videos, soundtracks = {}, {}
+                    for i, p in enumerate(ref_video_paths, 1):
+                        videos[f"ref_video_{i}"], track = self._ref_video(p, width, height, frame_count(duration))
+                        if track:
+                            soundtracks[f"ref_video_audio_{i}"] = track
                     cond, latent = self.n["ReferenceToVideo"].execute(
                         clip=self.clip, vae=self.vae, audio_vae=self.audio_vae, prompt=prompt,
                         width=width, height=height, length=frame_count(duration),
-                        ref_image_size="match", ref_images=refs)
+                        ref_image_size="match", ref_images=refs, ref_videos=videos, ref_video_audios=soundtracks)
                 else:
                     first = load_image(image_path) if image_path else None
                     last = load_image(last_image_path) if last_image_path else None
@@ -501,6 +510,38 @@ class H3Engine:
                      for i, n in enumerate(names)}
         return {"frames": int(images.shape[0]), "steps": steps, "timings": durations,
                 "models": model_info(lora, lora_strength, sampler, steps)}
+
+    @staticmethod
+    def _ref_video(path, width, height, frames):
+        """(IMAGE, AUDIO or None) for a reference video: its first `frames` frames at 24 fps, scaled down (keeping
+        the aspect) to the generation's pixel area, and the same stretch of its soundtrack. The node would put the
+        video on a 1344×768 canvas whatever the job's size, and its tokens join every attention call, so a full
+        size reference can triple a 544p job's sequence and run out of memory."""
+        import av
+        import numpy as np
+        import torch
+        from comfy_extras.nodes_audio import load
+
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0]
+            w, h = stream.codec_context.width, stream.codec_context.height
+            scale = min(1.0, math.sqrt(width * height / (w * h)))
+            tw, th = max(32, round(w * scale / 32) * 32), max(32, round(h * scale / 32) * 32)
+            images = []
+            for frame in container.decode(stream):
+                # resample to 24 fps by timestamp: keep a frame once it reaches the next output slot
+                if frame.time is not None and frame.time + 0.5 / FPS < len(images) / FPS:
+                    continue
+                images.append(frame.reformat(width=tw, height=th, format="rgb24").to_ndarray())
+                if len(images) >= frames:
+                    break
+            has_audio = bool(container.streams.audio)
+        video = torch.from_numpy(np.stack(images)).float() / 255.0
+        if not has_audio:
+            return video, None
+        waveform, rate = load(str(path))
+        return video, {"waveform": waveform[:, :int(math.ceil(len(images) / FPS * rate))].unsqueeze(0),
+                       "sample_rate": rate}
 
     @staticmethod
     def _audio_clip(path, start, duration):

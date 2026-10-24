@@ -8,7 +8,7 @@ import RefImages from './RefImages.vue'
 
 const props = defineProps({
   resolutions: Array, groups: Array, loras: Array, defaultLoras: Object, aspects: Array, durationRange: Array,
-  maxRefs: Number, strengthRange: Array, samplers: Array, picture: Object, music: Object,
+  maxRefs: Number, maxRefVideos: Number, strengthRange: Array, samplers: Array, picture: Object, music: Object,
   ready: Boolean,
 })
 const emit = defineEmits(['created'])
@@ -32,7 +32,7 @@ const PICTURE_HINT = {
 }
 const SECTION_RE = /^\s*integrated_multimodal_description:\s*([\s\S]*?)\n\s*\n\s*overall_soundscape:\s*([\s\S]*?)\n\s*\n\s*non_diegetic_music:\s*([\s\S]*?)\s*$/
 const REF_SECTION_RE = /\n\s*detailed_description:\s*([\s\S]*?)\n\s*\n\s*overall_soundscape:\s*([\s\S]*?)\n\s*\n\s*non_diegetic_music:\s*([\s\S]*?)\s*$/
-const SUBJECT_RE = /^<Subject (\d+)> is ([\s\S]*?), as shown in <Picture \d+>\.$/gm
+const SUBJECT_RE = /^<Subject (\d+)> is ([\s\S]*?), as shown in <(?:Picture|Video) \d+>\.$/gm
 const FAMILY = { t2v: 'fl2va', i2v: 'fl2va', r2v: 'ref2va' }
 const MUSIC_CAPTION_HINT = `Global Metadata: Lo-fi hip-hop, 78 BPM, D flat major. Laid-back and dreamy, late-night study mood.
 
@@ -92,6 +92,8 @@ function pickAudio(e) {
   e.target.value = ''
 }
 const refs = ref([])
+// Reference videos follow the images: <Video k> is <Subject images + k>; its soundtrack goes in as <Audio k>.
+const refVideos = ref([])
 const imageSize = ref(null)
 const submitting = ref(false)
 const error = ref('')
@@ -146,17 +148,21 @@ function assemble(s) {
 
 // With no reference images the ref2va model runs on the prompt alone: no subjects to define or retain.
 function assembleRef(s) {
-  const tags = refs.value.map((_, i) => i + 1)
+  const sources = [
+    ...refs.value.map((r, i) => ({ desc: r.desc, tag: `<Picture ${i + 1}>`, keep: `Preserve the same appearance as in <Picture ${i + 1}>.` })),
+    ...refVideos.value.map((r, i) => ({ desc: r.desc, tag: `<Video ${i + 1}>`, keep: `Follow <Video ${i + 1}>.` })),
+  ]
+  const tags = sources.map((_, i) => i + 1)
   const seconds = (frames.value / 24).toFixed(4)
   const names = tags.map((i) => `<Subject ${i}>`)
   const featuring = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]
   const subjects = tags.length
     ? 'subject_definitions:\n' +
-      refs.value.map((r, i) => `<Subject ${i + 1}> is ${r.desc.trim() || 'the subject'}, as shown in <Picture ${i + 1}>.`).join('\n') + '\n\n'
+      sources.map((r, i) => `<Subject ${i + 1}> is ${r.desc.trim() || 'the subject'}, as shown in ${r.tag}.`).join('\n') + '\n\n'
     : ''
   const retention = tags.length
     ? '\n\nretention_analysis:\n' +
-      tags.map((i) => `<Subject ${i}> (appears in [Shot 1]): fully_preserved - Preserve the same appearance as in <Picture ${i}>.`).join('\n')
+      sources.map((r, i) => `<Subject ${i + 1}> (appears in [Shot 1]): fully_preserved - ${r.keep}`).join('\n')
     : ''
   return subjects +
     `summary:\n[reference generation] A continuous ${seconds}-second video` + (featuring ? ` featuring ${featuring}` : '') + ', as described below.' +
@@ -184,7 +190,8 @@ const prompt = computed(() => {
 const hasContent = computed(() => (rawMode.value ? raw.value.trim() : sections.value.picture.trim()))
 
 function applyDescs(descs) {
-  descs.forEach((d, i) => { if (refs.value[i]) refs.value[i].desc = d })
+  const items = [...refs.value, ...refVideos.value]
+  descs.forEach((d, i) => { if (items[i]) items[i].desc = d })
 }
 
 function toggleRaw() {
@@ -339,7 +346,10 @@ async function submit() {
       form.append('image', imageFile.value)
       if (lastFile.value) form.append('last_image', lastFile.value)
     }
-    if (mode.value === 'r2v') refs.value.forEach((r) => form.append('ref_image', r.file))
+    if (mode.value === 'r2v') {
+      refs.value.forEach((r) => form.append('ref_image', r.file))
+      refVideos.value.forEach((r) => form.append('ref_video', r.file))
+    }
     if (audioFile.value) {
       form.append('audio', audioFile.value)
       form.append('audio_start', String(audioStart.value || 0))
@@ -389,8 +399,14 @@ function reuse(job) {
   if (job.mode === 'r2v') {
     mode.value = 'r2v'
     aspect.value = match ? match[0] : '16:9'
-    Promise.all(job.ref_urls.map((u, i) => fileFrom(u, job.refs[i]))).then((files) => {
-      refs.value = files.map((file, i) => ({ id: `reuse-${job.id}-${i}`, file, desc: descs[i] || '' }))
+    const videoUrls = job.ref_video_urls || []
+    Promise.all([
+      ...job.ref_urls.map((u, i) => fileFrom(u, job.refs[i])),
+      ...videoUrls.map((u, i) => fileFrom(u, job.ref_videos[i])),
+    ]).then((files) => {
+      const n = job.ref_urls.length
+      refs.value = files.slice(0, n).map((file, i) => ({ id: `reuse-${job.id}-${i}`, file, desc: descs[i] || '' }))
+      refVideos.value = files.slice(n).map((file, i) => ({ id: `reuse-${job.id}-v${i}`, file, desc: descs[n + i] || '' }))
     })
   } else if (job.image_url) {
     mode.value = 'i2v'
@@ -540,6 +556,12 @@ defineExpose({ reuse, useAsRef, useAsFrame, useAsAudio })
     <div v-if="mode === 'r2v'" class="field">
       <span class="field-label">Reference images<span class="aside">People, objects or places; image N is &lt;Subject N&gt;</span></span>
       <RefImages v-model="refs" :max="maxRefs || 6" />
+    </div>
+
+    <div v-if="mode === 'r2v'" class="field">
+      <span class="field-label">Reference videos<span class="aside">Motion, camera or scene, with its sound</span></span>
+      <RefImages v-model="refVideos" video :first="refs.length + 1" :max="maxRefVideos || 3" />
+      <p v-if="refVideos.length" class="help">Each reference video multiplies the generation time (a 5 s clip at 544p: ~26 s → ~100 s).</p>
     </div>
 
     <div v-if="mode === 'i2v'" class="field">

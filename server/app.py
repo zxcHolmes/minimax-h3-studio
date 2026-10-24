@@ -24,7 +24,8 @@ from pathlib import Path
 from aiohttp import web
 
 from h3_engine import (
-    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REFS, MUSIC_DURATION_RANGE,
+    ASPECT_RATIOS, DEFAULT_LORAS, GROUPS, LEGACY_PRESETS, LORA_STRENGTH_RANGE, LORAS, MAX_REF_VIDEOS, MAX_REFS,
+    MUSIC_DURATION_RANGE, REF_VIDEO_MIN_SECONDS,
     RESOLUTIONS, SAMPLERS, STEPS_RANGE, UPSCALE_TARGETS, UPSCALERS, Canceled, H3Engine, canvas_size, fixed_sampling,
     image_model_info, image_size, model_info, music_model_info, upscale_model_info, upscale_size, with_keyframe_prefix,
 )
@@ -147,6 +148,7 @@ class Worker(threading.Thread):
                 sampler=job["sampler"], steps=job["steps"], image_path=UPLOADS / job["image"] if job["image"] else None,
                 last_image_path=UPLOADS / job["last_image"] if job["last_image"] else None,
                 ref_paths=[UPLOADS / name for name in job["refs"]],
+                ref_video_paths=[UPLOADS / name for name in job["ref_videos"]],
                 audio_path=UPLOADS / job["guide_audio"] if job["guide_audio"] else None,
                 audio_start=job["audio_start"] or 0.0,
                 video_path=VIDEOS / video, thumb_path=THUMBS / thumb, on_progress=on_progress)
@@ -171,6 +173,7 @@ def job_view(job, positions):
                         ("image", "uploads"), ("last_image", "uploads"), ("guide_audio", "uploads")):
         view[f"{key}_url"] = f"/files/{folder}/{job[key]}" if job[key] else None
     view["ref_urls"] = [f"/files/uploads/{name}" for name in job["refs"]]
+    view["ref_video_urls"] = [f"/files/uploads/{name}" for name in job["ref_videos"]]
     # Finished jobs record what they ran on; others show what their LoRA will use.
     stored = (job["result"] or {}).get("models")
     if job["mode"] == "t2i":
@@ -214,6 +217,7 @@ async def presets(request):
         "aspect_ratios": list(ASPECT_RATIOS),
         "duration_range": DURATION_RANGE,
         "max_refs": MAX_REFS,
+        "max_ref_videos": MAX_REF_VIDEOS,
         "lora_strength_range": LORA_STRENGTH_RANGE,
         "samplers": SAMPLERS,
         "steps_range": STEPS_RANGE,
@@ -271,7 +275,7 @@ async def create_job(request):
     raw_seed = (form.get("seed") or "").strip()
     seed = int(raw_seed) % MAX_SEED if raw_seed.lstrip("-").isdigit() else random.randrange(MAX_SEED)
 
-    if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image", "audio")) \
+    if any(isinstance(form.get(f), web.FileField) for f in ("image", "last_image", "ref_image", "ref_video", "audio")) \
             and kind in ("image", "music"):
         return bad_request(f"{kind} jobs take no input images or audio")
 
@@ -318,6 +322,7 @@ async def create_job(request):
         return bad_request(str(e))
     refs = [r for r in refs if r]
     try:
+        ref_videos = [v for v in (read_video(u) for u in form.getall("ref_video", [])) if v]
         guide = read_audio(form.get("audio"))
         audio_start = float(form.get("audio_start") or 0)
     except ValueError as e:
@@ -328,14 +333,16 @@ async def create_job(request):
         return bad_request("a last frame needs a first frame")
     if len(refs) > MAX_REFS:
         return bad_request(f"at most {MAX_REFS} reference images")
+    if len(ref_videos) > MAX_REF_VIDEOS:
+        return bad_request(f"at most {MAX_REF_VIDEOS} reference videos")
     # Reference images or a ref2va model choice pick the ref2va DiT (which also runs with no references);
     # everything else runs on fl2va.
     lora = form.get("lora")
     if lora and lora not in LORAS:
         return bad_request(f"unknown lora {lora}")
-    family = "ref2va" if refs or (lora and LORAS[lora]["family"] == "ref2va") else "fl2va"
+    family = "ref2va" if refs or ref_videos or (lora and LORAS[lora]["family"] == "ref2va") else "fl2va"
     if family == "ref2va" and (first or last):
-        return bad_request("ref2va jobs take ref_image, not image / last_image")
+        return bad_request("ref2va jobs take ref_image / ref_video, not image / last_image")
     lora = lora or DEFAULT_LORAS[family][resolution]
     if LORAS[lora]["family"] != family:
         return bad_request(f"lora {lora} is for {LORAS[lora]['family']} jobs")
@@ -371,11 +378,12 @@ async def create_job(request):
     image_name = save(first) if first else None
     last_name = save(last) if last else None
     ref_names = [save(r) for r in refs]
+    ref_video_names = [save(v) for v in ref_videos]
     guide_name = save(guide) if guide else None
 
     aspect = form.get("aspect_ratio") or "16:9"
-    if aspect == "image" and (first or refs):
-        w, h = (first or refs[0])[2]
+    if aspect == "image" and (first or refs or ref_videos):
+        w, h = (first or (refs or ref_videos)[0])[2]
         ratio = w / h
     elif aspect in ASPECT_RATIOS:
         ratio = ASPECT_RATIOS[aspect]
@@ -388,7 +396,7 @@ async def create_job(request):
         prompt = with_keyframe_prefix(prompt, duration, last_frame=bool(last_name))
     job = store.create(mode=mode, preset=resolution, lora=lora, lora_strength=lora_strength, sampler=sampler, steps=steps,
                        prompt=prompt, width=width, height=height, duration=duration, seed=seed, image=image_name,
-                       last_image=last_name, refs=ref_names, guide_audio=guide_name,
+                       last_image=last_name, refs=ref_names, ref_videos=ref_video_names, guide_audio=guide_name,
                        audio_start=audio_start if guide_name else None)
     if worker.state == "ready":
         worker.queue.put(job["id"])
@@ -420,6 +428,27 @@ async def upscale_job(request):
     if worker.state == "ready":
         worker.queue.put(job["id"])
     return web.json_response(job_view(job, queue_positions(store)), status=201)
+
+
+def read_video(upload):
+    """(bytes, suffix, (w, h), seconds) for an uploaded reference video, None when absent, raises ValueError if
+    unreadable or shorter than REF_VIDEO_MIN_SECONDS. Longer videos are trimmed to the job's length at run time."""
+    import av
+    if not isinstance(upload, web.FileField):
+        return None
+    data = upload.file.read()
+    try:
+        with av.open(io.BytesIO(data)) as container:
+            stream = container.streams.video[0]
+            size = (stream.codec_context.width, stream.codec_context.height)
+            seconds = float(container.duration / av.time_base) if container.duration else \
+                float(stream.duration * stream.time_base)
+    except Exception:
+        raise ValueError("ref_video is not a readable video file")
+    if seconds < REF_VIDEO_MIN_SECONDS:
+        raise ValueError(f"reference videos must be at least {REF_VIDEO_MIN_SECONDS:g} s long")
+    suffix = Path(upload.filename or "").suffix.lower()
+    return data, suffix if suffix in (".mp4", ".mov", ".webm", ".mkv") else ".mp4", size, seconds
 
 
 def read_audio(upload):
@@ -473,7 +502,8 @@ async def delete_job(request):
     for folder, name in ((VIDEOS, job["video"]), (PICTURES, job["picture"]), (MUSIC_DIR, job["audio"]),
                          (THUMBS, job["thumb"]),
                          (UPLOADS, job["image"]), (UPLOADS, job["guide_audio"]),
-                         (UPLOADS, job["last_image"]), *((UPLOADS, n) for n in job["refs"])):
+                         (UPLOADS, job["last_image"]), *((UPLOADS, n) for n in job["refs"]),
+                         *((UPLOADS, n) for n in job["ref_videos"])):
         if name:
             (folder / name).unlink(missing_ok=True)
     store.delete(job["id"])

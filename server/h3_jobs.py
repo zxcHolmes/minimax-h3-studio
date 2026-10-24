@@ -11,8 +11,9 @@ COLUMNS = (
     "image", "video", "thumb", "stage", "progress", "error", "result",
     "created_at", "started_at", "finished_at", "last_image", "refs", "lora", "lora_strength",
     "picture", "audio", "lyrics", "guide_audio", "audio_start", "sampler", "steps", "source", "upscaler",
+    "ref_videos",
 )
-JSON_COLUMNS = ("result", "refs")
+JSON_COLUMNS = ("result", "refs", "ref_videos")
 
 ACTIVE = ("queued", "running")
 
@@ -30,15 +31,15 @@ class JobStore:
                 "video TEXT, thumb TEXT, stage TEXT, progress REAL, error TEXT, result TEXT, "
                 "created_at REAL, started_at REAL, finished_at REAL, last_image TEXT, refs TEXT, lora TEXT, "
                 "lora_strength REAL, picture TEXT, audio TEXT, lyrics TEXT, guide_audio TEXT, "
-                "audio_start REAL, sampler TEXT, steps INTEGER, source TEXT, upscaler TEXT)")
-            # Databases created before the last-frame, reference, LoRA, picture, music, audio-guide, sampler, steps and upscale
-            # options lack these.
+                "audio_start REAL, sampler TEXT, steps INTEGER, source TEXT, upscaler TEXT, ref_videos TEXT)")
+            # Databases created before the last-frame, reference, LoRA, picture, music, audio-guide, sampler, steps, upscale and
+            # reference video options lack these.
             existing = {r["name"] for r in self._db.execute("PRAGMA table_info(jobs)")}
             for column, kind in (("last_image", "TEXT"), ("refs", "TEXT"), ("lora", "TEXT"),
                                  ("lora_strength", "REAL"), ("picture", "TEXT"),
                                  ("audio", "TEXT"), ("lyrics", "TEXT"), ("guide_audio", "TEXT"),
                                  ("audio_start", "REAL"), ("sampler", "TEXT"), ("steps", "INTEGER"),
-                                 ("source", "TEXT"), ("upscaler", "TEXT")):
+                                 ("source", "TEXT"), ("upscaler", "TEXT"), ("ref_videos", "TEXT")):
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             self._db.commit()
@@ -112,4 +113,5 @@ class JobStore:
             if job.get(column):
                 job[column] = json.loads(job[column])
         job["refs"] = job["refs"] or []
+        job["ref_videos"] = job["ref_videos"] or []
         return job
