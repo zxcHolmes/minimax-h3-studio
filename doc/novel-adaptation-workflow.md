@@ -35,8 +35,8 @@ outputs/<title>/
     chapters/001.txt ...      one plain-text file per chapter
     chapters.json             index: number, title, character count, file
   analysis/
-    chapters/001.md ...       one note per chapter, written during the read-through
-    synopsis.md               the whole story after the read-through: logline, arc, ending, themes
+    chapters/001.md ...       one note per chapter, written as the reading advances
+    synopsis.md               the story so far: logline, arc, themes (the ending once read)
     timeline.md               when each chapter happens; ages and costume changes over time
   bible/
     cast.json                 the single source of every look, keep and voice string (machine-read)
@@ -73,7 +73,20 @@ Check the printed list before going on: the count, the order, no 0-word or tiny 
 or back matter. Copy the splitter into the project's `scripts/` and adjust it there if a book needs another
 heading pattern. Record the chapter count and total length in `PROGRESS.md`.
 
-## Step 2: read the whole book once
+## Step 2: read ahead of production
+
+First skim the whole book without loading it: rank recurring capitalised names (`grep -oE` and `uniq -c`), count
+key terms per chapter, read each chapter's opening and closing lines, and search for ages, deaths, marriages and
+reunions. Write `analysis/synopsis.md` from that: logline, the arc chapter by chapter, the main characters and
+anything set up early that pays off later, marking guesses as unconfirmed. For *The Night Land* this took a few
+thousand words of reading for a 197,000-word book and was enough to fix the narrator's voice and plan episode 1.
+
+Then read in full ahead of production. Production does not wait for the whole book. Read and note the chapters an episode needs, plus one chapter
+beyond it, then make that episode; keep reading ahead as the episodes go. Only the series-wide choices must be
+fixed before episode 1: the narrator's voice, the base style line and the treatment. Characters, variants,
+places and the season plan grow in the bible as the reading reaches them, each before the episode that first
+needs it. What a rolling read cannot do is change an episode already made, so note in each chapter note anything
+that looks set up for later (a scar, an object, a name) and carry it into the bible at once.
 
 Read the chapters in order, one at a time. After each chapter, write its note before opening the next one, so
 nothing depends on holding the book in context. A long novel takes several sessions: mark each chapter done in
@@ -104,12 +117,29 @@ after each part. Keep each note under about 400 words:
 ```
 
 Use stable ids for characters and places from the first chapter on (`mathilde`, `loisel`, `flat`), and record
-every alias a character goes by. When the read-through is done, write `analysis/synopsis.md` and
-`analysis/timeline.md` from the notes, not from memory.
+every alias a character goes by. Keep `analysis/synopsis.md` and `analysis/timeline.md` up to date from the
+notes as the reading advances, not from memory.
+
+### Delegating the chapter notes
+
+Reading a whole novel costs more context than one session has. The notes can be delegated to a helper agent such
+as the Codex CLI, one run at a time (never several in parallel), in groups of a few chapters queued in one
+background loop:
+
+```bash
+codex exec -m gpt-6.1-sol -c model_reasoning_effort=medium -s workspace-write -C outputs/<title> \
+  --skip-git-repo-check --ephemeral -o logs/codex_out_002.txt "$(cat logs/codex_prompt_002.md)"
+```
+
+The prompt names the chapter files, points at a finished note as the format example, fixes the ids of the main
+characters, asks for long chapters to be read in parts to the end, and limits writes to `analysis/chapters/`.
+Write the first chapter's note yourself as the example, and spot-check the helper's notes against the source
+(a few searched lines per chapter) before building the bible on them.
 
 ## Step 3: the bible
 
-Build the bible from the chapter notes. It is the reference every later episode reads.
+Build the bible from the chapter notes and extend it as the reading advances. It is the reference every later
+episode reads.
 
 `bible/cast.json` holds the strings that go into prompts; nothing else may spell a look or a voice:
 
@@ -137,7 +167,7 @@ Rules:
   shots instead, with the closest variant as reference (a reference carries its costume into the shot unless the
   prompt names the new one).
 - A variant may override the voice (age, illness); otherwise the character's voice applies everywhere.
-- Plan every variant from `analysis/timeline.md` before the first episode, so ages and costumes are decided once.
+- Decide each variant from the notes before the episode that first needs it, so it is cast once and never redone.
 - Give the main voices clearly different gender, age or pitch. Minor characters who speak in one episode still
   get a voice entry, so a later appearance sounds the same.
 - `locations.json` does the same for places; `style.md` fixes the style line and one score line per arc.
@@ -149,11 +179,16 @@ episodes were made with the old wording.
 
 ## Step 4: the season plan
 
-Write `plan/season.md`: which chapters each episode covers, its arc in two or three sentences, the cliffhanger it
+Write `plan/season.md` as far as the reading has reached and extend it as it goes: which chapters each episode covers, its arc in two or three sentences, the cliffhanger it
 ends on, the cast variants it needs, and the characters it introduces. Use the episode length from Step 0 and the
 speech budget of directing-workflow.md (about 2.5 English words or 3–3.5 Chinese characters per second): a novel
 has far more words than an episode can speak, so plan narration for interior monologue and time jumps, and cut
-side plots rather than rush the main one. Show the plan to the user before casting.
+side plots rather than rush the main one.
+
+Once all chapter notes exist, the helper agent can draft the whole plan from them (`plan/season_draft.md`: episode
+map with chapter splits such as `7a`/`7b`, per-episode arc, keep-list, variants and new locations, a season-wide
+variants-to-cast list, setups and payoffs). Review it and rename it to `season.md`; re-check each episode's entry
+against its chapter notes before storyboarding that episode.
 
 ## Step 5: casting
 
@@ -194,7 +229,7 @@ A new session reads this file first and does what its "Next action" says. Keep i
 16:9 · 544p · English speech · episodes ~4 min · faithful, side plots cut · stylized 3D, painterly
 
 ## Phase
-Production (read-through, bible, season plan and casting done)
+Production: E02 (chapters noted to 4, bible and season plan to E03)
 
 ## Episodes
 | Ep | Chapters | Status | Length | Notes |
@@ -226,7 +261,7 @@ as guide audio on its first shot; make it once and reuse the same file.
 
 - Voices are fixed by text, not cloned: the same voice phrase gives a similar voice, not an identical one. Keep
   the phrase byte-for-byte identical and let the user judge the casting clips.
-- A long read-through costs time; write each chapter note before reading on, and never re-read the whole book
+- Reading costs time and context; write each chapter note before reading on, and never re-read the whole book
   in one session.
 - Faces drift slightly between episodes as between shots; always pass the variant's reference, even for a
   character seen from behind.
