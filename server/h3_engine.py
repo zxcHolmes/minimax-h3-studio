@@ -750,6 +750,12 @@ class H3Engine:
         self.mm.interrupt_current_processing(False)
         on_progress("loading", 0.0)
         start = time.perf_counter()
+        # FlashVSR allocates with plain torch, outside ComfyUI's memory management, so the H3 / MOSS / music
+        # weights DynamicVRAM keeps resident after a job would leave it out of memory. Move them off the GPU
+        # first; their references stay, and the next job streams them back from mmap.
+        self.mm.unload_all_models()
+        gc.collect()
+        self.mm.soft_empty_cache()
         if self._flashvsr is None:
             self._flashvsr = runtime.ModelHandle(
                 **FLASHVSR, directory=Path(self.comfyui_path) / "models" / FLASHVSR_DIR, auto_download=False,
