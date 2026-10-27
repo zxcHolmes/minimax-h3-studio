@@ -12,26 +12,33 @@ from job_forms.video import video_fields
 from job_forms.media import music_fields
 from job_forms.picture import image_fields
 from job_forms.mesh import mesh_fields
+from job_forms.audio import speech_fields, asr_fields
 
 BUILDERS = {
     "video": video_fields,
     "image": image_fields,
     "music": music_fields,
     "3d": mesh_fields,
+    "speech": speech_fields,
+    "asr": asr_fields,
 }
 
 
 def common_fields(form):
     kind = form.get("kind") or "video"
-    if kind not in ("video", "image", "music", "3d"):
+    if kind not in BUILDERS:
         raise ValueError(f"unknown kind {kind}")
     prompt = (
-        form.get("prompt") or ("Pixal3D image to 3D" if kind == "3d" else "")
+        form.get("prompt") or ("Pixal3D image to 3D" if kind == "3d" else "Transcription" if kind == "asr" else "")
     ).strip()
     if not prompt:
         raise ValueError("prompt is required")
     if len(prompt) > MAX_PROMPT:
         raise ValueError("prompt is too long")
+    if kind in ("speech", "asr"):
+        raw_seed = (form.get("seed") or "").strip()
+        seed = int(raw_seed) % 2**32 if raw_seed.lstrip("-").isdigit() else random.randrange(2**32)
+        return kind, {"prompt": prompt, "seed": seed}
     resolution = form.get("resolution") or "768p"
     if resolution not in RESOLUTIONS:
         raise ValueError(f"unknown resolution {resolution}")

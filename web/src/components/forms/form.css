@@ -93,11 +93,11 @@
 .seed { display: flex; gap: 8px; }
 
 .submit {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
   padding-top: 18px; border-top: 1px solid var(--line);
 }
 .estimate { display: flex; flex-direction: column; font-size: 12.5px; line-height: 1.4; }
-.go { padding: 10px 26px; font-size: 14px; }
+.go { padding: 10px 26px; font-size: 14px; max-width: 100%; white-space: normal; }
 .error { color: var(--live); margin: 0; font-size: 13px; }
 
 }

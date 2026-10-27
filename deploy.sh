@@ -62,6 +62,10 @@ render_unit() {
   unit=${unit//@USER@/$user}
   unit=${unit//@DIR@/$REMOTE}
   unit=${unit//@COMFYUI@/$H3_COMFYUI}
+  unit=${unit//@AUDIOCPP_DIR@/${H3_AUDIOCPP_DIR:-}}
+  unit=${unit//@AUDIOCPP_PORT@/${H3_AUDIOCPP_PORT:-8191}}
+  unit=${unit//@AUDIOCPP_THREADS@/${H3_AUDIOCPP_THREADS:-8}}
+  unit=${unit//@AUDIOCPP_TIMEOUT@/${H3_AUDIOCPP_TIMEOUT:-1800}}
   unit=${unit//@HOST@/${H3_HOST:-0.0.0.0}}
   unit=${unit//@PORT@/$PORT}
   unit=${unit//@COMFY_ARGS@/$comfy_args}
@@ -102,12 +106,13 @@ deploy_models() {
   need H3_COMFYUI
   echo "==> syncing the model list to $HOST:$REMOTE"
   remote "mkdir -p '$REMOTE/server' '$REMOTE/comfy_launcher' '$REMOTE/scripts'"
-  rsync -az server/model_catalog.py server/image_models.py "$HOST:$REMOTE/server/"
-  rsync -az scripts/prepare_models.py "$HOST:$REMOTE/scripts/"
+  rsync -az server/model_catalog.py server/image_models.py server/audio_catalog.py "$HOST:$REMOTE/server/"
+  rsync -az scripts/prepare_models.py scripts/model_download.py scripts/prepare_audio_runtime.py "$HOST:$REMOTE/scripts/"
   echo "==> downloading into $H3_COMFYUI/models (rerun to resume if interrupted)"
   local args="" envs=""
   [ $# -eq 0 ] || args=$(printf ' %q' "$@")
   [ -z "${HF_ENDPOINT:-}" ] || envs+="HF_ENDPOINT=$(printf %q "$HF_ENDPOINT") "
+  [ -z "${H3_AUDIOCPP_DIR:-}" ] || envs+="H3_AUDIOCPP_DIR=$(printf %q "$H3_AUDIOCPP_DIR") "
   [ -z "${HF_TOKEN:-}" ] || envs+="HF_TOKEN=$(printf %q "$HF_TOKEN") "
   ssh -t "$HOST" "${envs}python3 '$REMOTE/scripts/prepare_models.py' --comfyui '$H3_COMFYUI'$args"
 }

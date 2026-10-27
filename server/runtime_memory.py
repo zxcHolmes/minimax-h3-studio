@@ -7,7 +7,7 @@ from engine_errors import MemoryPressure
 
 log = logging.getLogger("h3.memory")
 MIB = 1024**2
-EXTERNAL_TASKS = {"flashvsr", "pixal3d"}
+EXTERNAL_TASKS = {"flashvsr", "pixal3d", "audio_cpp"}
 
 
 def is_memory_error(exc, mm=None):
@@ -49,7 +49,12 @@ class MemoryPolicy:
         if device.type != "cuda":
             self.task = task
             return
+        audio = getattr(self.engine, "audio_cpp", None)
+        if audio is not None and audio.resident_model is not None and (task[0] != "audio_cpp" or audio.resident_model != task[1]):
+            audio.unload()
         reserve = int(mm.minimum_inference_memory())
+        if audio is not None and audio.running and mm.get_free_memory(device) < reserve:
+            audio.stop()  # Release private CUDA caches/context if model unload was insufficient.
         changed = self.task != task
         action = "retained"
         if changed and task[0] in EXTERNAL_TASKS:

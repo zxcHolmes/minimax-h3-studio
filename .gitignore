@@ -29,3 +29,8 @@ HANDOFF.md
 .coverage
 .coverage.*
 htmlcov/
+
+# Optional native audio runtime and downloaded weights
+audio_cpp/
+*.gguf
+audio-v*-bin-*.tar.gz

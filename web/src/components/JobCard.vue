@@ -3,14 +3,15 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ActionStrip from './ActionStrip.vue'
 import UpscaleMenu from './UpscaleMenu.vue'
 import ModelPreview from './ModelPreview.vue'
+import TranscriptResult from './TranscriptResult.vue'
 import { shortModel } from '../models'
 import { PhCube, PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
 const props = defineProps({ job: Object, now: Number, upscale: Object })
-const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'use-3d', 'use-edit', 'upscale'])
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'use-3d', 'use-edit', 'use-voice', 'upscale'])
 
-const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
-const MODES = { i23d: '3D', t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', i2i: 'Image edit', t2m: 'Music', upscale: 'Upscale' }
+const STAGES = { preprocessing: 'Preparing audio', synthesizing: 'Generating speech', transcribing: 'Transcribing audio', loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
+const MODES = { tts: 'Speech', asr: 'Transcription', i23d: '3D', t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', i2i: 'Image edit', t2m: 'Music', upscale: 'Upscale' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
@@ -26,6 +27,9 @@ const is3D = computed(() => props.job.mode === 'i23d')
 const MESH_STAGES = { preprocessing: 'Preparing the object', structure: 'Generating structure', shape: 'Generating shape', shape_detail: 'Refining geometry', texture: 'Generating materials', meshing: 'Baking textures' }
 const MESH_SPANS = { loading: [0, 0], preprocessing: [0, .08], structure: [.08, .18], shape: [.18, .35], shape_detail: [.35, .62], texture: [.62, .85], meshing: [.85, .99], saving: [.99, 1] }
 const isPicture = computed(() => ['t2i', 'i2i'].includes(props.job.mode))
+const isSpeech = computed(() => props.job.mode === 'tts')
+const isASR = computed(() => props.job.mode === 'asr')
+const isNativeAudio = computed(() => isSpeech.value || isASR.value)
 const isMusic = computed(() => props.job.mode === 't2m')
 const isUpscale = computed(() => props.job.mode === 'upscale')
 const overall = computed(() => {
@@ -43,11 +47,12 @@ const elapsed = computed(() => {
 
 const frames = computed(() => props.job.result?.frames)
 const clipLength = computed(() => {
-  if (isMusic.value) {
+  if (isMusic.value || isSpeech.value || isASR.value) {
+    if (!props.job.duration && !props.job.result?.seconds) return '-'
     const s = Math.round(props.job.result?.seconds ?? props.job.duration)
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
   }
-  return `${frames.value ? (frames.value / 24).toFixed(1) : +props.job.duration.toFixed(1)}s`
+  return `${frames.value ? (frames.value / 24).toFixed(1) : +(props.job.duration || 0).toFixed(1)}s`
 })
 // Targets above the video's short side ('1080p' -> 1080); picking an upscaler and a target queues the job.
 const targets = computed(() => props.job.video_url
@@ -82,11 +87,12 @@ onBeforeUnmount(() => observer?.disconnect())
 
 <template>
   <article class="card" :class="job.status">
-    <div class="screen" :class="{ music: isMusic }" :style="{ aspectRatio: is3D ? '1 / 1' : isMusic ? '16 / 6' : `${job.width} / ${job.height}` }">
-      <ModelPreview v-if="is3D && job.model_3d_url" :src="job.model_3d_url" :poster="job.thumb_url" />
-      <div v-else-if="isMusic && job.status === 'done' && job.audio_url" class="player">
-        <PhMusicNotes :size="34" weight="duotone" />
-        <audio :src="job.audio_url" controls preload="none" />
+    <div class="screen" :class="{ music: isMusic || isSpeech, transcription: isASR && job.status === 'done' }" :style="{ aspectRatio: is3D ? '1 / 1' : isASR && job.status === 'done' ? 'auto' : (isMusic || isNativeAudio) ? '16 / 6' : `${job.width} / ${job.height}` }">
+      <TranscriptResult v-if="isASR && job.status === 'done'" :transcript="job.result?.transcript" />
+      <ModelPreview v-else-if="is3D && job.model_3d_url" :src="job.model_3d_url" :poster="job.thumb_url" />
+      <div v-else-if="(isMusic || isSpeech) && job.status === 'done' && job.audio_url" class="player">
+        <PhSpeakerHigh v-if="isSpeech" :size="34" weight="duotone" /><PhMusicNotes v-else :size="34" weight="duotone" />
+        <audio :src="job.audio_url" controls :preload="isSpeech ? 'metadata' : 'none'" />
       </div>
       <a v-else-if="job.status === 'done' && job.picture_url" :href="job.picture_url" target="_blank" rel="noopener">
         <img class="picture" :src="job.picture_url" :alt="job.prompt" loading="lazy" />
@@ -105,7 +111,7 @@ onBeforeUnmount(() => observer?.disconnect())
           <template v-if="job.status === 'running'">
             <span class="rec"><i />REC</span>
             <span class="stage">{{ (is3D && MESH_STAGES[job.stage]) || STAGES[job.stage] || job.stage }}</span>
-            <span class="track"><span :style="{ transform: `scaleX(${overall})` }" /></span>
+            <span class="track" :class="{ indeterminate: isNativeAudio }"><span :style="{ transform: `scaleX(${overall})` }" /></span>
           </template>
           <span v-else-if="job.status === 'queued'" class="stage">Queued, #{{ job.queue_position }}</span>
           <span v-else-if="job.status === 'failed'" class="stage failed"><PhWarningCircle :size="18" />Generation failed</span>
@@ -128,8 +134,8 @@ onBeforeUnmount(() => observer?.disconnect())
       </details>
 
       <dl class="specs mono">
-        <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"><template v-if="job.refs.length || !job.ref_videos?.length"> ×{{ job.refs.length }}</template><template v-if="job.ref_videos?.length"> + {{ job.ref_videos.length }} video</template></template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
-        <div v-if="!isMusic && !is3D"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
+        <div><dt>Mode</dt><dd>{{ isSpeech ? ({ generate: 'Speech', clone: 'Voice clone', design: 'Voice design' }[job.audio_options?.speech_mode] || 'Speech') : MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"><template v-if="job.refs.length || !job.ref_videos?.length"> ×{{ job.refs.length }}</template><template v-if="job.ref_videos?.length"> + {{ job.ref_videos.length }} video</template></template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
+        <div v-if="!isMusic && !is3D && !isNativeAudio"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
         <div v-if="!isPicture && !is3D"><dt>Length</dt><dd>{{ clipLength }}</dd></div>
         <div v-if="is3D"><dt>Detail</dt><dd>{{ job.mesh_options?.resolution }} · {{ (job.mesh_options?.texture_size || 2048) / 1024 }}K</dd></div>
         <div v-if="is3D && job.result?.faces"><dt>Faces</dt><dd>{{ job.result.faces.toLocaleString() }}</dd></div>
@@ -152,11 +158,13 @@ onBeforeUnmount(() => observer?.disconnect())
             <PhStop :size="13" weight="fill" />Cancel
           </button>
           <template v-else>
+            <a v-for="(url, format) in job.transcript_urls || {}" :key="format" class="btn small" :href="url" :download="`transcript_${job.id}.${format === 'words' ? 'words.json' : format}`"><PhDownloadSimple :size="14" />{{ format === 'words' ? 'Words JSON' : format.toUpperCase() }}</a>
+            <button v-if="isSpeech && job.audio_url && job.duration <= 30" class="btn small" @click="emit('use-voice', job)"><PhSpeakerHigh :size="14" />Clone voice</button>
             <a v-if="job.model_3d_url" class="btn small" :href="job.model_3d_url" :download="`pixal3d_${job.id}.glb`"><PhDownloadSimple :size="14" />GLB</a>
             <a v-if="job.video_url" class="btn small" :href="job.video_url" :download="`h3_${job.id}.mp4`">
               <PhDownloadSimple :size="14" />Download
             </a>
-            <a v-if="job.audio_url" class="btn small" :href="job.audio_url" :download="`music_${job.id}.mp3`">
+            <a v-if="job.audio_url" class="btn small" :href="job.audio_url" :download="`${isSpeech ? 'speech' : 'music'}_${job.id}.${isSpeech ? 'wav' : 'mp3'}`">
               <PhDownloadSimple :size="14" />Download
             </a>
             <button v-if="job.audio_url" class="btn small" title="Use as the guide audio of a video" @click="emit('use-audio', job)">
@@ -242,4 +250,10 @@ onBeforeUnmount(() => observer?.disconnect())
 .actions { width: 100%; min-width: 0; }
 .small { padding: 4px 11px; font-size: 12px; }
 .icon.small { padding: 5px; }
+</style>
+
+<style scoped>
+.screen.transcription { max-height: none; }
+.indeterminate span { width: 35%; animation: native-progress 1.5s ease-in-out infinite; transform: none !important; }
+@keyframes native-progress { 0% { margin-left: 0; } 50% { margin-left: 65%; } 100% { margin-left: 0; } }
 </style>

@@ -13,12 +13,15 @@ sys.path.insert(0, str(ROOT / "comfy_launcher"))
 from run_h3 import bootstrap_comfy, load_larryvrh_nodes
 from engine_errors import Canceled
 from runtime_memory import MemoryPolicy
+from audio_runtime import AudioCppServer
+from audio_catalog import native_id as audio_native_id
+from pipelines import audio_cpp
 from model_catalog import AUDIO_VAE, CLIP, DEFAULT_LORAS, LORAS, VIDEO_VAE, unet_file
 from pipelines import video, picture, music, seedvr2, flashvsr, pixal, media
 
 
 class H3Engine:
-    def __init__(self, comfyui_path, comfy_argv):
+    def __init__(self, comfyui_path, comfy_argv, *, audio_settings=None):
         self.comfyui_path = comfyui_path
         self.comfy_argv = comfy_argv
         self.memory = MemoryPolicy(self)
@@ -33,6 +36,9 @@ class H3Engine:
         self._flashvsr = None
         self._pixal = None
         self._cancel = False
+        self.audio_cpp = AudioCppServer(audio_settings.audio_root, audio_settings.data / "audio_cpp",
+            port=audio_settings.audio_cpp_port, threads=audio_settings.audio_cpp_threads,
+            timeout=audio_settings.audio_cpp_timeout) if audio_settings is not None else None
 
     def bootstrap(self):
         """ComfyUI's process-level setup (CLI args, DynamicVRAM). Call from the main thread."""
@@ -125,6 +131,8 @@ class H3Engine:
         everything else off the GPU. The next job reloads what it needs. Call from the worker thread when idle."""
         import torch
 
+        if self.audio_cpp is not None:
+            self.audio_cpp.stop()
         self.memory.reset()
         if self._flashvsr is not None:
             self._flashvsr.release()
@@ -190,6 +198,8 @@ class H3Engine:
 
     def cancel(self):
         self._cancel = True
+        if self.audio_cpp is not None and self.memory.task and self.memory.task[0] == "audio_cpp":
+            self.audio_cpp.request_stop()
         self.mm.interrupt_current_processing(True)
 
     def _check(self):
@@ -347,3 +357,11 @@ class H3Engine:
     def generate_3d(self, **kwargs):
         self._prepare_task(("pixal3d",))
         return pixal.generate_3d(self, **kwargs)
+
+    def generate_speech(self, *, model, options, **kwargs):
+        self._prepare_task(("audio_cpp", audio_native_id(model, options["speech_mode"])))
+        return audio_cpp.speech(self, model=model, options=options, **kwargs)
+
+    def transcribe(self, *, model, **kwargs):
+        self._prepare_task(("audio_cpp", model))
+        return audio_cpp.transcribe(self, model=model, **kwargs)

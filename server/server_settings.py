@@ -14,6 +14,8 @@ HISTORY_KINDS = {
     "image": ("t2i", "i2i"),
     "music": ("t2m",),
     "3d": ("i23d",),
+    "speech": ("tts",),
+    "asr": ("asr",),
 }
 
 
@@ -24,6 +26,10 @@ class ServerSettings:
     web_dist: Path
     host: str = "0.0.0.0"
     port: int = 8190
+    audio_cpp_dir: Path | None = None
+    audio_cpp_port: int = 8191
+    audio_cpp_threads: int = 8
+    audio_cpp_timeout: int = 1800
     comfy_args: tuple = ("--enable-triton-backend", "--use-sage-attention")
 
     @classmethod
@@ -36,6 +42,10 @@ class ServerSettings:
             web_dist=Path(os.environ.get("H3_WEB_DIST", ROOT / "web_dist")).resolve(),
             host=os.environ.get("H3_HOST", "0.0.0.0"),
             port=int(os.environ.get("H3_PORT", "8190")),
+            audio_cpp_dir=Path(os.environ['H3_AUDIOCPP_DIR']).expanduser().resolve() if os.environ.get('H3_AUDIOCPP_DIR') else None,
+            audio_cpp_port=int(os.environ.get('H3_AUDIOCPP_PORT', '8191')),
+            audio_cpp_threads=int(os.environ.get('H3_AUDIOCPP_THREADS', '8')),
+            audio_cpp_timeout=int(os.environ.get('H3_AUDIOCPP_TIMEOUT', '1800')),
             comfy_args=tuple(
                 shlex.split(
                     os.environ.get(
@@ -58,6 +68,18 @@ class ServerSettings:
         return self.data / "music"
 
     @property
+    def audio_root(self):
+        return self.audio_cpp_dir or (self.comfyui.parent / "audio_cpp" if self.comfyui else self.data / "audio_cpp_runtime")
+
+    @property
+    def speech(self):
+        return self.data / "speech"
+
+    @property
+    def transcripts(self):
+        return self.data / "transcripts"
+
+    @property
     def thumbs(self):
         return self.data / "thumbs"
 
@@ -78,5 +100,7 @@ class ServerSettings:
             self.thumbs,
             self.uploads,
             self.models3d,
+            self.speech,
+            self.transcripts,
         ):
             path.mkdir(parents=True, exist_ok=True)

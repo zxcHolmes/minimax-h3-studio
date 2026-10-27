@@ -33,6 +33,8 @@ const strengthRange = ref([0, 2])
 const samplers = ref([])
 const picture = ref(null)
 const music = ref(null)
+const speech = ref(null)
+const asr = ref(null)
 const upscale = ref(null)
 const PAGE_SIZE = 24
 const jobs = ref(null)
@@ -73,7 +75,7 @@ async function refresh() {
   const version = ++refreshVersion
   clearTimeout(timer)
   try {
-    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE, history.value.kind, history.value.imageModel)])
+    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE, history.value.kind, history.value.imageModel, history.value.audioModel)])
     if (version !== refreshVersion) return
     health.value = h
     total.value = j.total
@@ -92,7 +94,7 @@ async function refresh() {
   timer = setTimeout(refresh, active.value || !ready.value ? 1500 : 8000)
 }
 
-watch(() => `${history.value.kind}:${history.value.imageModel || ""}`, () => {
+watch(() => `${history.value.kind}:${history.value.imageModel || ""}:${history.value.audioModel || ""}`, () => {
   page.value = 1
   total.value = 0
   jobs.value = null
@@ -104,7 +106,7 @@ async function cancel(job) {
   refresh()
 }
 
-const OUTPUT = { i23d: '3D model', t2i: 'picture', i2i: 'picture', t2m: 'song' }
+const OUTPUT = { tts: 'speech', asr: 'transcript', i23d: '3D model', t2i: 'picture', i2i: 'picture', t2m: 'song' }
 
 async function remove(job) {
   const scene = job.prompt.match(/(?:integrated_multimodal_description|detailed_description):\s*([\s\S]*?)(\n\s*\n|$)/)
@@ -157,6 +159,11 @@ async function useRef(job) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+async function useVoice(job) {
+  await form.value?.useAsVoice(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 async function useAudio(job) {
   await form.value?.useAsAudio(job)
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -183,6 +190,8 @@ onMounted(async () => {
     picture.value = p.image || null
     mesh.value = p.mesh || null
     music.value = p.music || null
+    speech.value = p.speech || null
+    asr.value = p.asr || null
     upscale.value = p.upscale || null
   } catch { /* refresh() reports offline */ }
   refresh()
@@ -220,6 +229,8 @@ onUnmounted(() => { refreshVersion++; clearTimeout(timer); clearInterval(clock) 
         :samplers="samplers"
         :picture="picture"
         :music="music"
+        :speech="speech"
+        :asr="asr"
         :ready="ready"
         @created="created"
       />
@@ -253,6 +264,7 @@ onUnmounted(() => { refreshVersion++; clearTimeout(timer); clearInterval(clock) 
           @use-ref="useRef"
           @use-frame="useFrame"
           @use-audio="useAudio"
+          @use-voice="useVoice"
           @use-3d="use3D"
           @use-edit="useEdit"
           @upscale="upscaleJob"

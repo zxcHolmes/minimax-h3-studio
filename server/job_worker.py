@@ -86,6 +86,20 @@ class Worker(threading.Thread):
         recover_memory = False
         video, thumb = f"{job_id}.mp4", f"{job_id}.jpg"
         try:
+            if job["mode"] in ("tts", "asr"):
+                options = job["audio_options"] or {}
+                source = self.settings.uploads / job["input_media"] if job["input_media"] else None
+                output = f"{job_id}.wav" if job["mode"] == "tts" else None
+                if job["mode"] == "tts":
+                    result = self.engine.generate_speech(model=job["audio_model"], text=job["prompt"], options=options,
+                        source_path=source, seed=job["seed"], audio_path=self.settings.speech / output, on_progress=on_progress)
+                else:
+                    result = self.engine.transcribe(model=job["audio_model"], source_path=source, options=options,
+                        folder=self.settings.transcripts, job_id=job_id, on_progress=on_progress)
+                self.store.update(job_id, status="done", stage="done", progress=1.0, audio=output,
+                    duration=result["seconds"], result=result, finished_at=time.time())
+                log.info("job %s done %s", job_id, job["mode"])
+                return
             if job["mode"] == "i23d":
                 model = f"{job_id}.glb"
                 result = self.engine.generate_3d(

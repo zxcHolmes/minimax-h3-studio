@@ -2,6 +2,7 @@
 
 from aiohttp import web
 from image_models import IMAGE_MODELS
+from audio_catalog import SPEECH_MODELS, ASR_MODELS
 import random
 import time
 from model_catalog import UPSCALERS, UPSCALE_TARGETS, upscale_size
@@ -24,11 +25,14 @@ async def list_jobs(request):
     image_model = request.query.get("image_model")
     if image_model is not None and (kind != "image" or image_model not in IMAGE_MODELS):
         return bad_request("image_model requires kind=image and a known image model")
+    audio_model = request.query.get("audio_model")
+    if audio_model is not None and (kind not in ("speech", "asr") or audio_model not in (SPEECH_MODELS if kind == "speech" else ASR_MODELS)):
+        return bad_request("audio_model requires a matching speech/asr history kind")
     modes = HISTORY_KINDS[kind] if kind else None
     positions = queue_positions(store)
     return web.json_response(
-        [job_view(j, positions) for j in store.list(limit, offset, modes=modes, image_model=image_model)],
-        headers={"X-Total-Count": str(store.count(modes=modes, image_model=image_model))},
+        [job_view(j, positions) for j in store.list(limit, offset, modes=modes, image_model=image_model, audio_model=audio_model)],
+        headers={"X-Total-Count": str(store.count(modes=modes, image_model=image_model, audio_model=audio_model))},
     )
 
 
@@ -105,7 +109,9 @@ async def delete_job(request):
         (settings.models3d, job["model_3d"]),
         (settings.videos, job["video"]),
         (settings.pictures, job["picture"]),
-        (settings.music, job["audio"]),
+        (settings.speech if job["mode"] == "tts" else settings.music, job["audio"]),
+        (settings.uploads, job["input_media"]),
+        *((settings.transcripts, n) for n in (job["result"] or {}).get("transcript", {}).get("exports", {}).values()),
         (settings.thumbs, job["thumb"]),
         (settings.uploads, job["image"]),
         (settings.uploads, job["guide_audio"]),

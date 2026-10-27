@@ -1,10 +1,10 @@
 <script setup>
 import { PhShuffle } from '@phosphor-icons/vue'
 const seed = defineModel('seed', { default: '' })
-defineProps({ ready: Boolean, submitting: Boolean, canSubmit: Boolean, error: String, label: String })
+defineProps({ ready: Boolean, submitting: Boolean, canSubmit: Boolean, error: String, label: String, seedVisible: { type: Boolean, default: true } })
 </script>
 <template>
-  <div class="field">
+  <div v-if="seedVisible" class="field">
     <label for="seed" class="field-label">Seed<span class="aside">Empty for random</span></label>
     <div class="seed">
       <input id="seed" v-model="seed" class="input mono" type="text" inputmode="numeric" placeholder="Random" />

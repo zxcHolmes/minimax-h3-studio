@@ -1,5 +1,7 @@
 """Job serialization and queue positions shared by all HTTP endpoints."""
 
+from audio_catalog import model_info as audio_model_info
+
 from model_catalog import (
     LORAS,
     model_info,
@@ -17,18 +19,23 @@ def job_view(job, positions):
         ("model_3d", "models3d"),
         ("video", "videos"),
         ("picture", "pictures"),
-        ("audio", "music"),
+        ("audio", "speech" if job["mode"] == "tts" else "music"),
         ("thumb", "thumbs"),
         ("image", "uploads"),
         ("last_image", "uploads"),
         ("guide_audio", "uploads"),
+        ("input_media", "uploads"),
     ):
         view[f"{key}_url"] = f"/files/{folder}/{job[key]}" if job[key] else None
     view["ref_urls"] = [f"/files/uploads/{name}" for name in job["refs"]]
     view["ref_video_urls"] = [f"/files/uploads/{name}" for name in job["ref_videos"]]
     # Finished jobs record what they ran on; others show what their LoRA will use.
     stored = (job["result"] or {}).get("models")
-    if job["mode"] == "i23d":
+    if job["mode"] in ("tts", "asr"):
+        view["models"] = stored or audio_model_info(job["audio_model"], (job["audio_options"] or {}).get("speech_mode", "generate"))
+        exports = (job["result"] or {}).get("transcript", {}).get("exports", {})
+        view["transcript_urls"] = {key: f"/files/transcripts/{name}" for key, name in exports.items()}
+    elif job["mode"] == "i23d":
         view["models"] = stored or pixal_model_info()
     elif job["mode"] in ("t2i", "i2i"):
         view["image_model"] = job["image_model"] or "moss"

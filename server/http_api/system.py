@@ -3,6 +3,7 @@
 import logging
 from aiohttp import web
 from image_models import IMAGE_MODELS, picture_size
+from audio_catalog import SPEECH_MODELS, ASR_MODELS, LANGUAGES, OMNI_INSTRUCTION_GROUPS
 import asyncio
 from model_catalog import (
     ASPECT_RATIOS,
@@ -54,6 +55,7 @@ async def health(request):
             ],
             "queued": len(request.app["store"].queued_ids()),
             "loaded_at": worker.loaded_at,
+            "audio_cpp": worker.engine.audio_cpp.status if getattr(worker.engine, "audio_cpp", None) else None,
             "memory": dict(worker.engine.memory.status) if hasattr(worker.engine, "memory") else None,
         }
     )
@@ -105,6 +107,8 @@ async def presets(request):
                              "sizes": {a: picture_size(key, ratio) for a, ratio in ASPECT_RATIOS.items()}}
                             for key, p in IMAGE_MODELS.items()],
             },
+            "speech": {"instruction_groups": OMNI_INSTRUCTION_GROUPS, "models": [{"id": k, **v} for k, v in SPEECH_MODELS.items()], "languages": LANGUAGES, "reference_seconds": [0.2, 30]},
+            "asr": {"models": [{"id": k, **v} for k, v in ASR_MODELS.items()], "languages": LANGUAGES, "max_seconds": 7200},
             "music": {
                 "duration_range": MUSIC_DURATION_RANGE,
                 "default_duration": 120,

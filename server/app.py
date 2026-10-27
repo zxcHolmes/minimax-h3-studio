@@ -19,10 +19,10 @@ def make_app(settings=None, engine=None, *, start_worker=True):
     engine = (
         engine
         if engine is not None
-        else H3Engine(settings.comfyui, settings.comfy_args)
+        else H3Engine(settings.comfyui, settings.comfy_args, audio_settings=settings)
     )
     worker = Worker(store, engine, settings)
-    app = web.Application(client_max_size=64 * 1024**2)
+    app = web.Application(client_max_size=256 * 1024**2)
     app["settings"], app["store"], app["worker"] = settings, store, worker
     app.router.add_get("/api/health", system.health)
     app.router.add_get("/api/presets", system.presets)
@@ -40,6 +40,8 @@ def make_app(settings=None, engine=None, *, start_worker=True):
         ("music", settings.music),
         ("thumbs", settings.thumbs),
         ("uploads", settings.uploads),
+        ("speech", settings.speech),
+        ("transcripts", settings.transcripts),
     ):
         app.router.add_static(f"/files/{name}", folder)
     app.router.add_get("/{path:.*}", frontend.frontend)

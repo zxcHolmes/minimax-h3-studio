@@ -6,6 +6,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
 - **Picture generation and editing** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B) (4 steps) and [Qwen Image 2.1 Turbo](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) (8 steps). Klein and Qwen edit input images; a finished picture goes into editing, video or 3D with one click.
 - **Image to 3D** with [Pixal3D](https://huggingface.co/Comfy-Org/Pixal3D): a single image becomes a textured GLB, with interactive rotation/zoom and download.
+- **Speech and transcription** through native [audio.cpp](https://github.com/0xShug0/audio.cpp) CUDA server: Qwen3-TTS, VoxCPM2 and OmniVoice for generation/cloning/design; Qwen3-ASR for uploaded audio/video transcription and supported subtitle exports.
 - **Music generation** with [MiniMax Music 3](https://huggingface.co/Comfy-Org/MiniMax-Music-3): songs up to 5 minutes from a caption and lyrics.
 - **Upscaling** finished videos to 1080p or 1440p with [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) (fast) or [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
 - **Guide audio** for video jobs: anchor a slice of a song or recording as the shot's soundtrack, so singing, speech and motion follow it (music videos, lip sync).
@@ -134,11 +135,15 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 | `H3_COMFY_ARGS` | | `--enable-triton-backend --use-sage-attention` | Extra ComfyUI CLI flags; set it empty if triton / sageattention are not installed |
 | `HF_ENDPOINT` | | `https://huggingface.co` | Hugging Face mirror for model downloads |
 | `HF_TOKEN` | | | Token for gated or private repos |
+| `H3_AUDIOCPP_DIR` | | sibling `audio_cpp/` next to `H3_COMFYUI` | Native runtime, package cache and selected GGUF models |
+| `H3_AUDIOCPP_PORT` | | `8191` | Worker-owned audio.cpp server, bound only to loopback |
+| `H3_AUDIOCPP_THREADS` | | `8` | Native CPU worker threads |
+| `H3_AUDIOCPP_TIMEOUT` | | `1800` | Maximum seconds for one native speech/ASR request |
 | `H3_API` | | `http://<deploy host>:<port>` | Where `npm run dev` proxies API calls |
 
 ## Models
 
-`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/model_catalog.py` and `server/image_models.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
+`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/model_catalog.py`, `server/image_models.py` and `server/audio_catalog.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
 
 ```bash
 python3 scripts/prepare_models.py --comfyui /path/to/ComfyUI
@@ -146,7 +151,7 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `klein`, `qwen-image`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `klein`, `qwen-image`, `audio`, `audio-runtime`, `qwen3_tts`, `voxcpm2`, `omnivoice`, `qwen3_asr`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -237,11 +242,63 @@ Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base;
 
 ![Music mode with lyrics and the length warning](doc/screenshots/music.webp)
 
+### Native speech and transcription (audio.cpp)
+
+Speech/ASR runs in the pinned **audio.cpp v0.9.3 CUDA 12.8 server**, independently of ComfyUI inference nodes. Studio starts its own loopback-only child on demand, with lazy loading, `max_loaded_models: 1`, a 1024 MiB native load headroom guard, and no idle unload timer. Repeated requests reuse the same model/session. The existing ComfyUI environment supplies CUDA/NCCL shared libraries to the child; a CPU fallback is rejected.
+
+Only the requested families are included:
+
+| Studio model | Prepared variant | Modes / timing |
+|---|---|---|
+| Qwen3-TTS | 1.7B Q8 Base, CustomVoice, VoiceDesign | Clone / preset speech / voice design use their respective checkpoints |
+| VoxCPM2 | Q8 | Generate, clone, design; descriptions use its native parenthesized text prefix |
+| OmniVoice | Q8 | Generate, clone, design; design uses the model's supported gender, age, pitch, accent/dialect and whisper attributes |
+| Qwen3-ASR | 1.7B Q8 + 0.6B Q8 Forced Aligner | Text and aligned words; subtitle cues are grouped from real aligned word spans |
+
+This integration transcribes uploaded recordings, not live microphone streams. Upload audio or video (WAV, MP3, M4A, FLAC, MP4, MOV, WebM and other PyAV-readable files); the worker extracts/resamples audio to mono 16 kHz PCM, retaining video start offsets and audio gaps so exported timestamps stay on the original playback timeline. Metadata-less browser WebM recordings are supported too. Maximum input is 2 hours / 256 MB. Clone references may be audio or video up to 30 seconds. Qwen cloning can use a reference transcript or its speaker-embedding-only mode when the transcript is omitted.
+
+Exports: TXT and JSON for every transcript; word JSON for aligned Qwen words; SRT and VTT only when the model actually returned timing spans. Qwen subtitle segments are grouped from alignment rather than claimed as native sentence detection.
+
+**Prepare runtime and models:**
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com ./deploy.sh models --only audio --workers 4 --connections 8
+# Runtime or individual groups can also be selected:
+./deploy.sh models --only audio-runtime qwen3_tts
+# Native-only preparation does not require a ComfyUI checkout:
+python scripts/prepare_models.py --only audio --audio-cpp /path/to/audio_cpp
+```
+
+The runtime is downloaded from the [v0.9.3 Ubuntu CUDA 12.8 Colab release](https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-ubuntu-x64-cuda12.8-colab.tar.gz). The archive and every selected GGUF have pinned SHA256 checksums in `server/audio_catalog.py`. Runtime installation rejects archive links/devices and path traversal and swaps a complete installation into place. If the GPU host cannot reach GitHub, prepare/cache the archive on a connected machine and copy that verified package into `<audio_cpp>/packages/` (and the small VAD asset into its listed model folder if raw GitHub downloads are blocked); preparation rechecks its checksum before installation. On Linux the binary also needs compatible CUDA/NCCL libraries; Studio discovers those from the existing Python environment.
+
+The selected weights total about **15.1 GiB**, plus a 218 MiB runtime archive, installed executable and the 1.2 MB Silero VAD dependency used by Qwen's timestamp-safe chunking. Allow at least 18 GiB. All other audio.cpp model families, fine-tunes and checkpoint precisions are excluded. GGUF tokenizers/codecs are embedded, so there is no extra tokenizer download.
+
+| File (relative to `<audio_cpp>/models/`) | Source | Approx. size |
+|---|---|---|
+| `Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` | audio-cpp/audio.cpp-gguf | 2.51 GiB |
+| `Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF/qwen3-tts-12hz-1.7b-customvoice-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 2.62 GiB |
+| `Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF/qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 2.62 GiB |
+| `VoxCPM2-GGUF/voxcpm2-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 2.75 GiB |
+| `OmniVoice-GGUF/omnivoice-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 1.26 GiB |
+| `Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 2.30 GiB |
+| `Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-q8_0.gguf` | audio-cpp/audio.cpp-gguf | 1.05 GiB |
+| `Silero-VAD/silero_vad_16k.safetensors` | audio.cpp v0.9.3 bundled asset | 1.2 MB |
+
+API: `POST /api/jobs` with `kind=speech`, `audio_model` (`qwen3_tts`, `voxcpm2`, `omnivoice`), `speech_mode` (`generate`, `clone`, `design`), `prompt` (text to speak), optional `instruction`, `language`, `voice`, `reference_text`, `seed`, and `voice_audio` for cloning. Design requires instructions; OmniVoice accepts only the declared attributes. Speech WAVs are under `/files/speech/` and can become video guide audio or another voice reference.
+
+For ASR, use `kind=asr`, `audio_model` (`qwen3_asr`), `media`, optional `language` and `timestamps` (`none`, `word`, `segment`; word alignment is the default). Export URLs are returned as `transcript_urls`; raw native details remain in the JSON export. History filters accept `kind=speech` or `kind=asr` plus the matching `audio_model`. Model files, generated runtime configs, logs, uploads and results stay outside tracked source.
+
+![Native voice cloning](doc/screenshots/speech.webp)
+
+![Qwen3-ASR aligned words and subtitle exports](doc/screenshots/asr.webp)
+
 ### GPU memory and model residency
 
 Healthy consecutive jobs reuse their model objects and warm GPU weights; there is no idle timer that clears the cache. Before each job, `runtime_memory.py` checks ComfyUI's available memory (including reusable allocator cache) against its native minimum inference headroom. With enough space, managed video/image/music/upscale tasks keep resident weights and let DynamicVRAM size allocations per node. Under pressure, ComfyUI offloads only as much as needed, then falls back to a full GPU offload. If headroom is still unavailable, the job fails before model loading.
 
-Changing the image model or video base releases only the old model family and its clones. Entering Pixal3D or FlashVSR releases ComfyUI GPU weights because their mesh/upscale kernels also allocate outside DynamicVRAM; CPU model objects remain cached. Pixal3D still frees GPU weights before meshing, and the upstream FlashVSR runtime returns its private pipeline to CPU between runs for safety.
+Changing the image model or video base releases only the old model family and its clones. Entering audio.cpp, Pixal3D or FlashVSR releases ComfyUI GPU weights because their mesh/upscale kernels also allocate outside DynamicVRAM; CPU model objects remain cached. Pixal3D still frees GPU weights before meshing, and the upstream FlashVSR runtime returns its private pipeline to CPU between runs for safety.
+
+Before returning from audio.cpp to ComfyUI, the worker explicitly unloads the native model. If its private CUDA context/cache still leaves insufficient execution headroom, the owned child process is stopped. Audio cancellation also terminates only that owned child; the next request starts a clean server.
 
 An OOM stops the current job and releases its inference frames and cached models without an automatic retry. The next queued job can proceed after successful recovery. If cleanup fails, the inference worker stops and health reports an error requiring a service restart; queued jobs stay in the database. `/api/health` includes the last worker memory snapshot and its action (`retained`, `reclaimed`, `offloaded_for_external`, or recovery). `POST /api/unload` remains available while idle for explicitly freeing the GPU.
 
@@ -321,6 +378,8 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 
 ## HTTP API
 
+See **[the complete API guide](doc/api.md)** for every model's parameters and curl examples, voice generation/cloning/design, ASR timestamp exports, task polling, downloads and GPU memory management.
+
 | Method | Path | |
 |---|---|---|
 | GET | `/api/health` | server state, running job, resident base model |
@@ -333,9 +392,9 @@ Running without the deploy script: build the UI (`cd web && npm install && npm r
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 | POST | `/api/unload` | free the GPU for another program while nothing is running or queued (409 otherwise); returns `vram_free_mb` / `vram_total_mb`, and the next job reloads its models |
 
-`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh and FastH3), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image` / `ref_video`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Reference videos (up to 3, at least 2 s) come after the images: the prompt calls them `<Video 1>`, `<Video 2>`, and the soundtrack of a video with audio is `<Audio k>`. The server trims each to the shot's length and scales it down to the shot's pixel area. Their tokens join every attention call, so a reference video costs time: a 5 s 544p shot takes ~100 s of sampling instead of ~26 s, 768p ~145 s, and 15 s with a 15 s reference ~560 s on a 4090. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
+`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh and FastH3), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for larryvrh and FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image` / `ref_video`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Reference videos (up to 3, at least 2 s) come after the images: the prompt calls them `<Video 1>`, `<Video 2>`, and the soundtrack of a video with audio is `<Audio k>`. The server trims each to the shot's length and scales it down to the shot's pixel area. Their tokens join every attention call, so a reference video costs time: a 5 s 544p shot takes ~100 s of sampling instead of ~26 s, 768p ~145 s, and 15 s with a 15 s reference ~560 s on a 4090. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
 
-A picture job sends `kind=image` with `prompt`, `aspect_ratio` (not `image`), `seed` (optional). The finished job has `picture_url`.
+A picture job sends `kind=image`, `image_model` (`moss`, `flux-klein-4b`, `qwen-image-21-turbo`), `prompt`, `aspect_ratio` and optional `seed`. Klein and Qwen also accept input images for editing; `aspect_ratio=image` follows the first input and is required for Qwen editing. The finished job has `picture_url`.
 
 A music job sends `kind=music` with `prompt` (the caption), `lyrics` (optional), `duration` (maximum length, 10–300 s, default 120) and `seed` (optional). The finished job has `audio_url`; `result.seconds` is the actual length.
 
