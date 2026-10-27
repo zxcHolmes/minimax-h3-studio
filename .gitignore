@@ -22,3 +22,10 @@ comfy_launcher/gpu.lock
 
 # Session handoff notes
 HANDOFF.md
+
+# Python lint/test caches and local coverage reports
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/

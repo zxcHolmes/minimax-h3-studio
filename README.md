@@ -5,17 +5,18 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 - **Text to video**, **image to video** (first frame, or first + last frame) and **references to video** (up to 6 images and 3 videos; a reference video passes on its motion, camera, scene and sound).
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
 - **Picture generation** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), for making reference images and first frames; a finished picture goes into a video job with one click.
+- **Image to 3D** with [Pixal3D](https://huggingface.co/Comfy-Org/Pixal3D): a single image becomes a textured GLB, with interactive rotation/zoom and download.
 - **Music generation** with [MiniMax Music 3](https://huggingface.co/Comfy-Org/MiniMax-Music-3): songs up to 5 minutes from a caption and lyrics.
 - **Upscaling** finished videos to 1080p or 1440p with [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) (fast) or [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
 - **Guide audio** for video jobs: anchor a slice of a song or recording as the shot's soundtrack, so singing, speech and motion follow it (music videos, lip sync).
 - FastVideo's distilled [FastH3](https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy) 8-step checkpoints as a second model group that runs without a LoRA.
 - Weights stay loaded between jobs; jobs run one at a time from a persistent queue.
-- Output is pixel-identical to the official ComfyUI example workflows with the same settings.
+- H3 video output is pixel-identical to the official ComfyUI example workflows with the same settings.
 - One script deploys the server and UI to a GPU machine over SSH; another downloads every checkpoint.
 
 On an RTX 4090 a 5-second clip with sound takes about 30–45 s at 544p and 65–70 s at 768p.
 
-![MiniMax-H3 Studio: the generation form on the left, finished jobs (Dailies) on the right](doc/screenshots/overview.webp)
+![MiniMax-H3 Studio: the generation form on the left, matching generation history on the right](doc/screenshots/overview.webp)
 
 ## Requirements
 
@@ -109,7 +110,7 @@ Keep `--enable-triton-backend` in `H3_COMFY_ARGS` too. Restart the server afterw
 ```bash
 git clone https://github.com/<you>/minimax-h3-studio && cd minimax-h3-studio
 cp .env.example .env          # then edit it, see Configuration
-./deploy.sh models            # download ~72 GB of checkpoints into ComfyUI/models on the GPU machine
+./deploy.sh models            # download configured checkpoints into ComfyUI/models on the GPU machine
 ./deploy.sh                   # build the UI, install the server, start it
 ```
 
@@ -121,7 +122,7 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `H3_DEPLOY_HOST` | yes | | SSH target of the GPU machine, e.g. `me@10.0.0.5` |
+| `H3_DEPLOY_HOST` | yes | | SSH target of the GPU machine, e.g. `me@gpu-host` |
 | `H3_COMFYUI` | yes | | ComfyUI checkout on the GPU machine |
 | `H3_CONDA_ENV` | | `comfyui` | Conda env that runs ComfyUI |
 | `H3_CONDA_SH` | | `~/miniconda3/etc/profile.d/conda.sh` | conda init script to source |
@@ -137,7 +138,7 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 
 ## Models
 
-`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/h3_engine.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
+`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/model_catalog.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
 
 ```bash
 python3 scripts/prepare_models.py --comfyui /path/to/ComfyUI
@@ -145,7 +146,7 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `music`, `upscale`, `flashvsr`, `pixal3d`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -165,6 +166,12 @@ Groups for `--skip`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth
 | `seedvr2_3b_int8_convrot` (upscaling) | `diffusion_models` | Comfy-Org/SeedVR2 | 3.2 GB |
 | `seedvr2_ema_vae_fp16` (upscaling VAE) | `vae` | Comfy-Org/SeedVR2 | 0.48 GB |
 | `v1/dit_int8_convrot`, `v1/LQ_proj_in.ckpt`, `TCDecoder.ckpt` (FlashVSR v1.1) | `flashvsr_plus` | t8star/Flashvsr-Plus-Comfy | 2.2 GB |
+| `pixal3d_int8_convrot` (image to 3D) | `diffusion_models` | Comfy-Org/Pixal3D | 5.2 GB |
+| `dino_v3_L_naf_fp32` (3D image encoder) | `clip_vision` | Comfy-Org/Pixal3D | 1.1 GB |
+| `trellis_2_shape_vae_bf16` (3D shape VAE) | `vae` | Comfy-Org/Pixal3D | 1.0 GB |
+| `trellis_2_texture_vae_bf16` (3D texture VAE) | `vae` | Comfy-Org/Pixal3D | 0.88 GB |
+| `moge_2_vitl_normal_fp16` (3D camera estimation) | `geometry_estimation` | Comfy-Org/MoGe | 0.62 GB |
+| `birefnet` (3D background removal) | `background_removal` | Comfy-Org/BiRefNet | 0.41 GB |
 
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
@@ -174,15 +181,16 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 |---|---|---|
 | Text | fl2va | prompt |
 | Frames | fl2va | first frame, optional last frame |
-| Reference | ref2va | 1–6 images, each with a short subject description |
+| Reference | FastH3 OmniRef (ref2va) | prompt, optional reference images (up to 6) and videos (up to 3) |
 | Picture | MOSS-Image | prompt (no video, no sound) |
 | Music | MiniMax Music 3 | caption, optional lyrics, maximum length (no video) |
+| Image to 3D | Pixal3D | one image; textured GLB output |
 
 Prompts are edited in three sections: picture, sound and music. Reference mode builds the official ref2va prompt layout (subject definitions, summary, retention) from the images and their descriptions; refer to them as `<Subject 1>`, `<Subject 2>`... Switch to the raw prompt view to see or edit the full text. Job cards show the first lines of the prompt; long prompts expand with Show more.
 
 ![Reference mode with two subjects, each with a short description](doc/screenshots/reference.webp)
 
-Every finished job lands in Dailies as a card: videos play inline, songs get an audio player and their lyrics, pictures link to the full-size PNG. Reuse loads a job's settings back into the form; a picture's **Reference** / **Frame** buttons and a song's **Video** button hand it to a video job.
+Finished jobs appear in the matching task-type history: videos play inline, songs get an audio player and their lyrics, pictures link to the full-size PNG, and 3D models offer interactive preview and GLB download. Reuse loads a job's settings back into the form; a picture's **Reference** / **Frame** buttons and a song's **Video** button hand it to a video job, while a picture's **3D** button opens image-to-3D generation.
 
 ![Two job cards: the same prompt with FastH3 V2 at 768p (71 s) and 544p (39 s)](doc/screenshots/cards.webp)
 
@@ -213,12 +221,46 @@ Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base;
 
 ![Music mode with lyrics and the length warning](doc/screenshots/music.webp)
 
+### Image to 3D (Pixal3D)
+
+Choose **Image to 3D** in the left navigation, upload a clear image of a single object, and generate. A finished picture's **3D** button sends it into this form. The model reconstructs geometry and PBR materials; the result card offers **Explore in 3D** (drag to rotate, scroll to zoom) and **GLB** download. The viewer loads on click so video jobs do not load the 3D renderer.
+
+The headless pipeline uses ComfyUI's native `Pixal3DConditioning` and TRELLIS.2 stages, based on the [official single-image workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/3d_pixal3d_trellis2_image_to_model.json): BiRefNet foreground mask → crop/pad 1.1 → MoGe field-of-view estimation → DINOv3 conditioning → structure (12 steps), shape (20), shape refinement (12), texture (12). Sampling is euler, cfg 7.5 for structure/shape and 1 for texture, structure shift 5, with the template's CFG overrides/rescaling. One job seed controls all four passes. Geometry defaults to 1024 (1536 optional), textures to 2K (1K/4K optional); mesh post-processing runs the official solid remesh at 768 (fill 20, band 1, smooth 20), decimates to at most 100k triangles, unwraps UVs and bakes base color, metallic and roughness maps from the original surface. Solid remeshing is essential: direct decimation of the decoded surface retained holes and overlapping shells. The optional normal-map/AO branches are omitted. This is the single-image model; multiview weights are not loaded.
+
+Requires a ComfyUI version containing `nodes_trellis2.py`, `nodes_moge.py`, `nodes_bg_removal.py` and the native mesh nodes. Models load lazily and run on the existing FIFO worker. Video models are moved off the GPU before mesh processing; `/api/unload` also drops the Pixal3D models. No additional custom nodes or ONNX background-removal model are needed.
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com ./deploy.sh models --only pixal3d
+```
+
+Measured on the RTX 4090 with the zebra picture: 1024 geometry / 2K texture, including the solid remesh, took 20 s including first load (10.5 MB GLB, 99,990 triangles). Geometry inspection after welding UV seams found **zero open boundary edges and zero non-manifold edges**; direct decimation had left 14,891 boundary edges. Consecutive 3D jobs and a following FastH3 video job completed normally. Runtime depends on the object and mesh complexity.
+
+This downloads approximately 9.3 GB: `pixal3d_int8_convrot`, DINOv3, TRELLIS.2 shape/texture VAEs, MoGe and BiRefNet. Every file is listed by `scripts/prepare_models.py --list --only pixal3d`.
+
+API: `POST /api/jobs` with multipart `kind=3d`, required `image`, optional `seed`, `mesh_resolution` (1024/1536), `texture_size` (1024/2048/4096), `remove_background` (true/false, default true), and an optional `prompt` label. Turn background removal off for an already transparent PNG; its alpha channel supplies the mask. Jobs have mode `i23d`, persist options in `mesh_options`, and expose the finished file through `model_3d_url` under `/files/models3d/`. Their result records timings, face/vertex counts and model names.
+
+![Pixal3D image-to-3D mode](doc/screenshots/3d.webp)
+
+### Backend structure
+
+`server/app.py` only assembles the aiohttp application and starts the service. `server_settings.py` reads environment variables and owns the data paths; each application receives its own settings instead of mutating module globals. HTTP handlers are grouped under `http_api/`, multipart form builders under `job_forms/`, file validation/storage in `job_uploads.py`, job serialization in `job_views.py`, and the FIFO worker in `job_worker.py`. SQLite persistence remains in `h3_jobs.py`.
+
+`model_catalog.py` is the standard-library-only registry for checkpoints, LoRAs, inference defaults and size helpers. The model downloader imports it directly. `h3_engine.py` owns ComfyUI bootstrap, model caches, VRAM lifecycle and cancellation; the individual video, picture, music, SeedVR2, FlashVSR and Pixal3D implementations live in `pipelines/`, alongside shared media helpers. GPU libraries are imported when a pipeline runs, after ComfyUI bootstrap. Add new model choices in the catalog, and new task-family pipelines separately from HTTP handling.
+
+Run backend regression tests with the project's configured Python interpreter: `python -m unittest discover -s tests -v`. The tests use the real application factory with isolated settings and a stub engine, covering submission validation, task-family history, cancellation/deletion/upscaling, and dispatch to every pipeline.
+
+### Frontend structure
+
+The history panel follows the selected task type: Videos (including upscales), Pictures, Music or 3D models. Counts and pagination are filtered on the server through `GET /api/jobs?kind=video|image|music|3d`; omitting `kind` preserves the all-jobs API. Switching type returns to page one and discards stale responses from the previous type.
+
+The left navigation is defined in `web/src/generationModes.js`, grouped by video, image, audio and 3D. `GenerateForm.vue` only routes to a family form and handles reuse; `KeepAlive` preserves inputs while switching families. `forms/VideoForm.vue`, `PictureForm.vue`, `MusicForm.vue` and `MeshForm.vue` own their settings. Video prompt fields and model settings are separate components, prompt assembly/parsing is in `useVideoPrompt.js`, and shared submission, drafts and seed controls live in `useGeneration.js` / `FormFooter.vue`. The desktop settings panel has a dedicated scroll region, resets to the top when the mode changes, and uses page scrolling on small screens. Result-card actions occupy a single horizontal scroll strip (touchpad/swipe, mouse wheel or arrow keys), and upscale options render outside the strip to avoid clipping. Each family saves its draft separately and migrates the old combined draft. To add a family, add its form component and registry entry.
+
 **Upscaling**: a finished video's **Upscale** button opens a menu of upscalers and the targets above the video's size (short side 1080 or 1440 px) and queues a new job; the audio and frame rate are copied from the source. H3 already produces 768p natively; upscaling adds sharpness, it does not add content.
 
 - **FlashVSR v1.1** (int8 DiT, Tiny decoder, Triton block-sparse attention) through T8star's FlashVSR+ node, which streams the clip in chunks. A 10.8 s 768p clip to 1080p took 87 s on the 4090, including the first model load. Its detail is the sharpest, but texture can shimmer on camera moves.
 - **SeedVR2 3B** (int8) with the settings of ComfyUI's SeedVR2 video upscale template: a lanczos resize to the target, one euler step, no color correction. The same clip took 272 s, almost all of it in SeedVR2's own VAE (69 s encode, 161 s decode, 19 s sampling). The clip is sampled in temporal chunks sized to the free VRAM, two latent frames overlapping and crossfaded, where the template samples it whole, and the VAE runs whole frames instead of the template's 512 px tiles, which nearly doubled its work (the same clip took 510 s with them).
 
-To add a LoRA, add an entry to `LORAS` in `server/h3_engine.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
+To add a LoRA, add an entry to `LORAS` in `server/model_catalog.py` (file, source repo, steps, sigma shift, resolutions), run `./deploy.sh models` and `./deploy.sh server`. The sigma shift must match what the LoRA was trained with.
 
 ## Deploying and operating
 

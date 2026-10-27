@@ -1,12 +1,25 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PhCaretLeft, PhCaretRight, PhFilmSlate } from '@phosphor-icons/vue'
 import { api } from './api'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import GenerateForm from './components/GenerateForm.vue'
 import JobCard from './components/JobCard.vue'
+import ModeNav from './components/ModeNav.vue'
+import { generationModes, historyTypes, initialMode } from './generationModes'
 import Logo from './components/Logo.vue'
 
+const mode = ref(initialMode())
+const history = computed(() => historyTypes[generationModes.find((m) => m.id === mode.value)?.family] || historyTypes.video)
+const composerScroll = ref(null)
+watch(mode, async (value) => {
+  try { localStorage.setItem('h3.mode', value) } catch { /* storage */ }
+  await nextTick()
+  // A shorter family must not inherit a long form's previous scroll offset.
+  composerScroll.value?.scrollTo({ top: 0 })
+  if (window.matchMedia('(max-width: 960px)').matches) window.scrollTo({ top: 0 })
+})
+const mesh = ref(null)
 const health = ref(null)
 const resolutions = ref([])
 const groups = ref([])
@@ -32,6 +45,7 @@ const confirmer = ref(null)
 const now = ref(Date.now())
 let timer = null
 let clock = null
+let refreshVersion = 0
 
 const ready = computed(() => health.value?.state === 'ready')
 const active = computed(() => !!(health.value?.running || health.value?.queued)
@@ -51,13 +65,16 @@ const status = computed(() => {
   if (h.state === 'loading') return { text: 'Loading models', tone: 'busy' }
   if (h.state === 'error') return { text: 'Models failed to load', tone: 'bad' }
   if (h.running) return { text: h.queued ? `Generating, ${h.queued} queued` : 'Generating', tone: 'busy' }
-  if (!h.unet) return { text: 'Idle · models unloaded', tone: 'idle' }
+  if (!h.unet) return { text: h.loaded_models?.length ? `Idle · ${h.loaded_models.join(', ')}` : 'Idle · models unloaded', tone: 'idle' }
   return { text: h.family === 'ref2va' ? 'Idle · reference model' : 'Idle', tone: 'idle' }
 })
 
 async function refresh() {
+  const version = ++refreshVersion
+  clearTimeout(timer)
   try {
-    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE)])
+    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE, history.value.kind)])
+    if (version !== refreshVersion) return
     health.value = h
     total.value = j.total
     offline.value = false
@@ -68,18 +85,26 @@ async function refresh() {
     }
     jobs.value = j.items
   } catch {
+    if (version !== refreshVersion) return
     offline.value = true
   }
   clearTimeout(timer)
   timer = setTimeout(refresh, active.value || !ready.value ? 1500 : 8000)
 }
 
+watch(() => history.value.kind, () => {
+  page.value = 1
+  total.value = 0
+  jobs.value = null
+  refresh()
+})
+
 async function cancel(job) {
   await api.cancel(job.id)
   refresh()
 }
 
-const OUTPUT = { t2i: 'picture', t2m: 'song' }
+const OUTPUT = { i23d: '3D model', t2i: 'picture', t2m: 'song' }
 
 async function remove(job) {
   const scene = job.prompt.match(/(?:integrated_multimodal_description|detailed_description):\s*([\s\S]*?)(\n\s*\n|$)/)
@@ -98,6 +123,11 @@ async function remove(job) {
 async function upscaleJob(job, upscaler, target) {
   await api.upscale(job.id, upscaler, target)
   created()
+}
+
+async function use3D(job) {
+  await form.value?.useAs3D(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function goTo(p) {
@@ -146,13 +176,14 @@ onMounted(async () => {
     strengthRange.value = p.lora_strength_range || [0, 2]
     samplers.value = p.samplers || []
     picture.value = p.image || null
+    mesh.value = p.mesh || null
     music.value = p.music || null
     upscale.value = p.upscale || null
   } catch { /* refresh() reports offline */ }
   refresh()
   clock = setInterval(() => { now.value = Date.now() }, 1000)
 })
-onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
+onUnmounted(() => { refreshVersion++; clearTimeout(timer); clearInterval(clock) })
 </script>
 
 <template>
@@ -165,9 +196,13 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
   </header>
 
   <main class="layout">
+    <ModeNav v-model="mode" />
     <aside class="composer">
+      <div ref="composerScroll" class="composer-scroll" tabindex="0" aria-label="Generation settings">
       <GenerateForm
         ref="form"
+        v-model:mode="mode"
+        :mesh="mesh"
         :resolutions="resolutions"
         :groups="groups"
         :loras="loras"
@@ -187,17 +222,18 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
         <summary>Model loading error</summary>
         <pre>{{ health.load_error }}</pre>
       </details>
+      </div>
     </aside>
 
-    <section ref="dailies" class="dailies" aria-label="Generated videos, pictures and music">
-      <h1 class="title">Dailies<span v-if="total" class="count mono">{{ total }}</span></h1>
+    <section ref="dailies" class="dailies" :aria-label="`${history.label} history`">
+      <h1 class="title">{{ history.label }}<span v-if="total" class="count mono">{{ total }}</span></h1>
 
       <div v-if="jobs === null" class="grid">
         <div v-for="n in 4" :key="n" class="skeleton" />
       </div>
       <div v-else-if="!jobs.length" class="empty">
         <PhFilmSlate :size="34" weight="duotone" />
-        <p>Nothing yet. Describe a scene and press Generate; videos, pictures and music show up here.</p>
+        <p>{{ history.empty }}</p>
       </div>
       <div v-else class="grid">
         <JobCard
@@ -212,6 +248,7 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
           @use-ref="useRef"
           @use-frame="useFrame"
           @use-audio="useAudio"
+          @use-3d="use3D"
           @upscale="upscaleJob"
         />
       </div>
@@ -251,12 +288,17 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
 .status.bad i { background: var(--live); }
 
 .layout {
-  display: grid; grid-template-columns: minmax(380px, 440px) 1fr; gap: 32px;
-  max-width: 1600px; margin: 0 auto; padding: 28px; align-items: start;
+  display: grid; grid-template-columns: 176px minmax(340px, 400px) minmax(0, 1fr); gap: 24px;
+  max-width: 1800px; margin: 0 auto; padding: 28px; align-items: start;
 }
 .composer {
-  background: var(--surface); border-radius: var(--r-card); box-shadow: var(--shadow); padding: 20px;
-  position: sticky; top: 84px; max-height: calc(100dvh - 108px); overflow: auto;
+  background: var(--surface); border-radius: var(--r-card); box-shadow: var(--shadow);
+  position: sticky; top: 84px; height: calc(100dvh - 108px); min-width: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.composer-scroll {
+  flex: 1 1 auto; min-height: 0; padding: 20px; overflow-y: auto; overflow-x: hidden;
+  scrollbar-gutter: stable; overscroll-behavior-y: contain; overflow-anchor: none; touch-action: pan-y;
 }
 .title {
   margin: 4px 0 18px; font-size: 26px; font-weight: 650; letter-spacing: -.025em;
@@ -286,8 +328,16 @@ onUnmounted(() => { clearTimeout(timer); clearInterval(clock) })
 
 @media (max-width: 960px) {
   .top { padding: 0 16px; }
-  .layout { grid-template-columns: 1fr; padding: 16px; gap: 24px; }
-  .composer { position: static; max-height: none; }
+  .layout { grid-template-columns: 160px minmax(0, 1fr); padding: 16px; gap: 20px; }
+  .mode-nav { grid-row: span 2; }
+  .composer { position: static; height: auto; overflow: visible; }
+  .composer-scroll { overflow: visible; scrollbar-gutter: auto; }
   .grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .layout { grid-template-columns: 44px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .composer-scroll { padding: 16px; }
+  .brand { font-size: 13px; }
+  .status { font-size: 11px; }
 }
 </style>

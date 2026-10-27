@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const host = (env.H3_DEPLOY_HOST || '').split('@').pop()
   const api = env.H3_API || (host ? `http://${host}:${env.H3_PORT || 8190}` : 'http://127.0.0.1:8190')
   return {
-    plugins: [vue()],
+    plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === 'model-viewer' } } })],
     server: {
       proxy: {
         '/api': api,

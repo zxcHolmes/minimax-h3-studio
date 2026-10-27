@@ -1,13 +1,16 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import ActionStrip from './ActionStrip.vue'
+import UpscaleMenu from './UpscaleMenu.vue'
+import ModelPreview from './ModelPreview.vue'
 import { shortModel } from '../models'
-import { PhArrowCounterClockwise, PhArrowsOut, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
+import { PhCube, PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
 const props = defineProps({ job: Object, now: Number, upscale: Object })
-const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'upscale'])
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'use-3d', 'upscale'])
 
 const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
-const MODES = { t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music', upscale: 'Upscale' }
+const MODES = { i23d: '3D', t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music', upscale: 'Upscale' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
@@ -19,11 +22,14 @@ const MUSIC_SPANS = { loading: [0, 0], composing: [0, 0.72], sampling: [0.72, 0.
 const UPSCALE_SPANS = { loading: [0, 0], reading: [0, 0.25], upscaling: [0.25, 0.32], decoding: [0.32, 0.97], saving: [0.97, 1] }
 // FlashVSR streams the clip, decoding and encoding as it goes, so its chunks cover the whole run.
 const FLASHVSR_SPANS = { loading: [0, 0.03], upscaling: [0.03, 0.98], saving: [0.98, 1] }
+const is3D = computed(() => props.job.mode === 'i23d')
+const MESH_STAGES = { preprocessing: 'Preparing the object', structure: 'Generating structure', shape: 'Generating shape', shape_detail: 'Refining geometry', texture: 'Generating materials', meshing: 'Baking textures' }
+const MESH_SPANS = { loading: [0, 0], preprocessing: [0, .08], structure: [.08, .18], shape: [.18, .35], shape_detail: [.35, .62], texture: [.62, .85], meshing: [.85, .99], saving: [.99, 1] }
 const isPicture = computed(() => props.job.mode === 't2i')
 const isMusic = computed(() => props.job.mode === 't2m')
 const isUpscale = computed(() => props.job.mode === 'upscale')
 const overall = computed(() => {
-  const spans = isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS
+  const spans = is3D.value ? MESH_SPANS : isPicture.value ? PICTURE_SPANS : isMusic.value ? MUSIC_SPANS
     : isUpscale.value ? (props.job.upscaler === 'flashvsr' ? FLASHVSR_SPANS : UPSCALE_SPANS) : SPANS
   const span = spans[props.job.stage]
   return span ? span[0] + (span[1] - span[0]) * (props.job.progress || 0) : 0
@@ -47,21 +53,6 @@ const clipLength = computed(() => {
 const targets = computed(() => props.job.video_url
   ? (props.upscale?.targets || []).filter((t) => parseInt(t) > Math.min(props.job.width, props.job.height))
   : [])
-const choosing = ref(false)
-const menuEl = ref(null)
-function pickUpscale(upscaler, target) {
-  choosing.value = false
-  emit('upscale', props.job, upscaler, target)
-}
-function closeMenu(e) {
-  if (!menuEl.value?.contains(e.target)) choosing.value = false
-}
-watch(choosing, (open) => {
-  if (open) setTimeout(() => document.addEventListener('click', closeMenu))
-  else document.removeEventListener('click', closeMenu)
-})
-onBeforeUnmount(() => document.removeEventListener('click', closeMenu))
-
 const created = computed(() => new Date(props.job.created_at * 1000).toLocaleString('en-US', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
 }))
@@ -91,8 +82,9 @@ onBeforeUnmount(() => observer?.disconnect())
 
 <template>
   <article class="card" :class="job.status">
-    <div class="screen" :class="{ music: isMusic }" :style="{ aspectRatio: isMusic ? '16 / 6' : `${job.width} / ${job.height}` }">
-      <div v-if="isMusic && job.status === 'done' && job.audio_url" class="player">
+    <div class="screen" :class="{ music: isMusic }" :style="{ aspectRatio: is3D ? '1 / 1' : isMusic ? '16 / 6' : `${job.width} / ${job.height}` }">
+      <ModelPreview v-if="is3D && job.model_3d_url" :src="job.model_3d_url" :poster="job.thumb_url" />
+      <div v-else-if="isMusic && job.status === 'done' && job.audio_url" class="player">
         <PhMusicNotes :size="34" weight="duotone" />
         <audio :src="job.audio_url" controls preload="none" />
       </div>
@@ -112,7 +104,7 @@ onBeforeUnmount(() => observer?.disconnect())
         <div class="state">
           <template v-if="job.status === 'running'">
             <span class="rec"><i />REC</span>
-            <span class="stage">{{ STAGES[job.stage] || job.stage }}</span>
+            <span class="stage">{{ (is3D && MESH_STAGES[job.stage]) || STAGES[job.stage] || job.stage }}</span>
             <span class="track"><span :style="{ transform: `scaleX(${overall})` }" /></span>
           </template>
           <span v-else-if="job.status === 'queued'" class="stage">Queued, #{{ job.queue_position }}</span>
@@ -137,8 +129,10 @@ onBeforeUnmount(() => observer?.disconnect())
 
       <dl class="specs mono">
         <div><dt>Mode</dt><dd>{{ MODES[job.mode] || job.mode }}<template v-if="job.mode === 'r2v'"><template v-if="job.refs.length || !job.ref_videos?.length"> ×{{ job.refs.length }}</template><template v-if="job.ref_videos?.length"> + {{ job.ref_videos.length }} video</template></template><PhImage v-else-if="job.image" :size="12" /><PhSpeakerHigh v-if="job.guide_audio" :size="12" :title="`Guide audio from ${job.audio_start || 0} s`" /></dd></div>
-        <div v-if="!isMusic"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
-        <div v-if="!isPicture"><dt>Length</dt><dd>{{ clipLength }}</dd></div>
+        <div v-if="!isMusic && !is3D"><dt>Size</dt><dd>{{ job.width }}×{{ job.height }}</dd></div>
+        <div v-if="!isPicture && !is3D"><dt>Length</dt><dd>{{ clipLength }}</dd></div>
+        <div v-if="is3D"><dt>Detail</dt><dd>{{ job.mesh_options?.resolution }} · {{ (job.mesh_options?.texture_size || 2048) / 1024 }}K</dd></div>
+        <div v-if="is3D && job.result?.faces"><dt>Faces</dt><dd>{{ job.result.faces.toLocaleString() }}</dd></div>
         <div><dt>Time</dt><dd>{{ elapsed === null ? '-' : `${elapsed}s` }}</dd></div>
       </dl>
 
@@ -153,11 +147,12 @@ onBeforeUnmount(() => observer?.disconnect())
 
       <footer class="foot">
         <span class="meta mono" :title="`seed ${job.seed}`">{{ [job.preset, created].filter(Boolean).join(' · ') }}</span>
-        <div class="actions">
+        <ActionStrip class="actions">
           <button v-if="job.status === 'queued' || job.status === 'running'" class="btn danger small" @click="emit('cancel', job)">
             <PhStop :size="13" weight="fill" />Cancel
           </button>
           <template v-else>
+            <a v-if="job.model_3d_url" class="btn small" :href="job.model_3d_url" :download="`pixal3d_${job.id}.glb`"><PhDownloadSimple :size="14" />GLB</a>
             <a v-if="job.video_url" class="btn small" :href="job.video_url" :download="`h3_${job.id}.mp4`">
               <PhDownloadSimple :size="14" />Download
             </a>
@@ -171,24 +166,15 @@ onBeforeUnmount(() => observer?.disconnect())
               <a class="btn icon small" :href="job.picture_url" :download="`moss_${job.id}.png`" aria-label="Download" title="Download">
                 <PhDownloadSimple :size="14" />
               </a>
+              <button class="btn small" title="Turn this picture into a 3D model" @click="emit('use-3d', job)"><PhCube :size="14" />3D</button>
               <button class="btn small" title="Use as a reference image" @click="emit('use-ref', job)"><PhUserFocus :size="14" />Reference</button>
               <button class="btn small" title="Use as the first frame" @click="emit('use-frame', job)"><PhFilmStrip :size="14" />Frame</button>
             </template>
-            <div v-if="targets.length" ref="menuEl" class="upscale">
-              <button class="btn small" :aria-expanded="choosing" @click="choosing = !choosing">
-                <PhArrowsOut :size="14" />Upscale
-              </button>
-              <div v-if="choosing" class="menu" role="menu">
-                <div v-for="u in upscale.upscalers" :key="u.id" class="menu-row">
-                  <span class="menu-label">{{ u.label }}</span>
-                  <button v-for="t in targets" :key="t" class="btn small" role="menuitem" @click="pickUpscale(u.id, t)">{{ t }}</button>
-                </div>
-              </div>
-            </div>
+            <UpscaleMenu v-if="targets.length" :upscale="upscale" :targets="targets" @select="(upscaler, target) => emit('upscale', job, upscaler, target)" />
             <button v-if="!isUpscale" class="btn small" @click="emit('reuse', job)"><PhArrowCounterClockwise :size="14" />Reuse</button>
             <button class="btn icon small danger" aria-label="Delete" @click="emit('remove', job)"><PhTrash :size="14" /></button>
           </template>
-        </div>
+        </ActionStrip>
       </footer>
     </div>
   </article>
@@ -197,7 +183,7 @@ onBeforeUnmount(() => observer?.disconnect())
 <style scoped>
 .card {
   background: var(--surface); border-radius: var(--r-card); box-shadow: var(--shadow);
-  overflow: hidden; display: flex; flex-direction: column;
+  overflow: hidden; display: flex; flex-direction: column; min-width: 0;
 }
 .screen { position: relative; background: var(--screen); max-height: 420px; width: 100%; }
 .screen video, .picture { width: 100%; height: 100%; display: block; object-fit: contain; background: var(--screen); }
@@ -228,7 +214,7 @@ onBeforeUnmount(() => observer?.disconnect())
 .track { width: min(70%, 320px); height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .14); overflow: hidden; }
 .track span { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform .5s ease; }
 
-.body { padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+.body { min-width: 0; padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
 .scene {
   margin: 0; font-size: 13px; line-height: 1.5; color: var(--text);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
@@ -250,17 +236,9 @@ onBeforeUnmount(() => observer?.disconnect())
 }
 .error summary { cursor: pointer; color: var(--live); font-size: 12px; }
 .error pre { white-space: pre-wrap; font-size: 11px; color: var(--live); max-height: 200px; overflow: auto; margin: 6px 0 0; }
-.foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
+.foot { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: auto; min-width: 0; }
 .meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.actions { display: flex; gap: 6px; }
-.upscale { position: relative; }
-.menu {
-  position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5;
-  display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
-  background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); white-space: nowrap;
-}
-.menu-row { display: flex; align-items: center; gap: 6px; }
-.menu-label { font-size: 12px; color: var(--text-2); min-width: 96px; }
+.actions { width: 100%; min-width: 0; }
 .small { padding: 4px 11px; font-size: 12px; }
 .icon.small { padding: 5px; }
 </style>

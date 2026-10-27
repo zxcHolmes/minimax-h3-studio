@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Download every checkpoint the server uses into a ComfyUI models folder.
 
-The file list comes from server/h3_engine.py (base DiTs, text encoder, VAEs and
-every entry in LORAS, including FastH3 bases, plus the MOSS-Image picture and MiniMax Music 3 models),
+The file list comes from server/model_catalog.py (base DiTs, text encoder, VAEs and
+every entry in LORAS, including FastH3 bases, plus MOSS-Image, MiniMax Music 3, upscalers and Pixal3D),
 so adding a LoRA there is enough for it to be prepared.
 Standard library only: run it with any Python 3.9+, no ComfyUI env needed.
 
@@ -25,14 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
-from h3_engine import (  # noqa: E402
-    AUDIO_VAE, CLIP, FLASHVSR_DIR, FLASHVSR_FILES, FLASHVSR_NODE, FLASHVSR_REPO, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
+from model_catalog import (  # noqa: E402
+    AUDIO_VAE, CLIP, PIXAL_FILES, FLASHVSR_DIR, FLASHVSR_FILES, FLASHVSR_NODE, FLASHVSR_REPO, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
     MUSIC_VAE, SEEDVR2_REPO, SEEDVR2_UNET, SEEDVR2_VAE, UNETS, VIDEO_VAE,
 )
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale", "flashvsr")
+GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale", "flashvsr", "pixal3d")
 
 
 def manifest():
@@ -62,6 +62,7 @@ def manifest():
         ("upscale", SEEDVR2_REPO, f"vae/{SEEDVR2_VAE}", "vae", SEEDVR2_VAE),
     ]
     items += [("flashvsr", FLASHVSR_REPO, name, FLASHVSR_DIR, name) for name in FLASHVSR_FILES]
+    items += [("pixal3d", repo, f"{sub}/{name}", sub, name) for repo, sub, name in PIXAL_FILES]
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
     families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}
     return [(g, repo, path, sub, name, families.get(name)) for g, repo, path, sub, name in items]
@@ -98,6 +99,8 @@ def download(url, dest):
                     pct = f"{done / total:6.1%}" if total else ""
                     print(f"\r    {pct} {human(done)} / {human(total)}", end="", flush=True)
     print()
+    if total and done != total:
+        raise IOError(f"incomplete download: {done} of {total} bytes; rerun to resume")
     part.rename(dest)
 
 
@@ -107,11 +110,13 @@ def main():
                    help="ComfyUI checkout (default: $H3_COMFYUI)")
     p.add_argument("--skip", nargs="*", default=[], choices=GROUPS, metavar="GROUP",
                    help=f"groups to leave out: {', '.join(GROUPS)}")
+    p.add_argument("--only", nargs="+", choices=GROUPS, help="download only these groups")
     p.add_argument("--list", action="store_true", help="print the files and exit")
     args = p.parse_args()
 
     endpoint = (os.environ.get("HF_ENDPOINT") or "https://huggingface.co").rstrip("/")
-    items = [it for it in manifest() if it[0] not in args.skip and it[5] not in args.skip]
+    items = [it for it in manifest() if it[0] not in args.skip and it[5] not in args.skip
+             and (not args.only or it[0] in args.only)]
 
     if args.list or not args.comfyui:
         for group, repo, path, sub, name, _ in items:
@@ -138,10 +143,10 @@ def main():
             print(f"\n    failed: {e}")
             failed.append(name)
 
-    if "larryvrh" not in args.skip and not (Path(args.comfyui).expanduser() / LARRYVRH_NODE).is_dir():
+    if (not args.only or "larryvrh" in args.only) and "larryvrh" not in args.skip and not (Path(args.comfyui).expanduser() / LARRYVRH_NODE).is_dir():
         print(f"\nnote: the larryvrh LoRA also needs its ComfyUI node:\n"
               f"    git clone https://github.com/larryvrh/ComfyUI-MiniMax-H3-Turbo {args.comfyui}/{LARRYVRH_NODE}")
-    if "flashvsr" not in args.skip and not (Path(args.comfyui).expanduser() / "custom_nodes" / FLASHVSR_NODE).is_dir():
+    if (not args.only or "flashvsr" in args.only) and "flashvsr" not in args.skip and not (Path(args.comfyui).expanduser() / "custom_nodes" / FLASHVSR_NODE).is_dir():
         print(f"\nnote: FlashVSR upscaling also needs its ComfyUI node:\n"
               f"    git clone https://github.com/T8mars/{FLASHVSR_NODE} {args.comfyui}/custom_nodes/{FLASHVSR_NODE}")
     if failed:

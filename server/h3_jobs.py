@@ -11,9 +11,9 @@ COLUMNS = (
     "image", "video", "thumb", "stage", "progress", "error", "result",
     "created_at", "started_at", "finished_at", "last_image", "refs", "lora", "lora_strength",
     "picture", "audio", "lyrics", "guide_audio", "audio_start", "sampler", "steps", "source", "upscaler",
-    "ref_videos",
+    "ref_videos", "model_3d", "mesh_options",
 )
-JSON_COLUMNS = ("result", "refs", "ref_videos")
+JSON_COLUMNS = ("result", "refs", "ref_videos", "mesh_options")
 
 ACTIVE = ("queued", "running")
 
@@ -39,7 +39,8 @@ class JobStore:
                                  ("lora_strength", "REAL"), ("picture", "TEXT"),
                                  ("audio", "TEXT"), ("lyrics", "TEXT"), ("guide_audio", "TEXT"),
                                  ("audio_start", "REAL"), ("sampler", "TEXT"), ("steps", "INTEGER"),
-                                 ("source", "TEXT"), ("upscaler", "TEXT"), ("ref_videos", "TEXT")):
+                                 ("source", "TEXT"), ("upscaler", "TEXT"), ("ref_videos", "TEXT"),
+                                 ("model_3d", "TEXT"), ("mesh_options", "TEXT")):
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             self._db.commit()
@@ -66,15 +67,24 @@ class JobStore:
             row = self._db.execute("SELECT * FROM jobs WHERE id = ?", [job_id]).fetchone()
         return self._decode(row) if row else None
 
-    def list(self, limit=100, offset=0):
+    @staticmethod
+    def _mode_filter(modes):
+        if modes is None:
+            return "", []
+        return " WHERE mode IN (" + ",".join("?" for _ in modes) + ")", list(modes)
+
+    def list(self, limit=100, offset=0, modes=None):
+        where, params = self._mode_filter(modes)
         with self._lock:
-            rows = self._db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                                    [limit, offset]).fetchall()
+            rows = self._db.execute("SELECT * FROM jobs" + where +
+                                    " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                                    [*params, limit, offset]).fetchall()
         return [self._decode(r) for r in rows]
 
-    def count(self):
+    def count(self, modes=None):
+        where, params = self._mode_filter(modes)
         with self._lock:
-            return self._db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            return self._db.execute("SELECT COUNT(*) FROM jobs" + where, params).fetchone()[0]
 
     def queued_ids(self):
         with self._lock:
