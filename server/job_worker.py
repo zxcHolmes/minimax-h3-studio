@@ -7,6 +7,7 @@ import threading
 import time
 import traceback
 from engine_errors import Canceled
+from runtime_memory import is_memory_error
 from job_views import job_strength
 
 log = logging.getLogger("h3")
@@ -46,6 +47,8 @@ class Worker(threading.Thread):
                 item()
             else:
                 self._run_one(item)
+                if self.state == "error":
+                    return
 
     def call(self, fn):
         """Run fn on the worker thread after the jobs queued before it; returns a concurrent Future."""
@@ -80,6 +83,7 @@ class Worker(threading.Thread):
                 last["t"] = now
                 self.store.update(job_id, stage=stage, progress=round(fraction, 3))
 
+        recover_memory = False
         video, thumb = f"{job_id}.mp4", f"{job_id}.jpg"
         try:
             if job["mode"] == "i23d":
@@ -104,9 +108,11 @@ class Worker(threading.Thread):
                 )
                 log.info("job %s done %s", job_id, result)
                 return
-            if job["mode"] == "t2i":
+            if job["mode"] in ("t2i", "i2i"):
                 picture = f"{job_id}.png"
                 result = self.engine.generate_image(
+                    image_model=job["image_model"] or "moss",
+                    ref_paths=[self.settings.uploads / name for name in job["refs"]],
                     prompt=job["prompt"],
                     width=job["width"],
                     height=job["height"],
@@ -224,11 +230,33 @@ class Worker(threading.Thread):
         except Canceled:
             self.store.update(job_id, status="canceled", finished_at=time.time())
             log.info("job %s canceled", job_id)
-        except Exception:
+        except Exception as exc:
+            recover_memory = is_memory_error(exc, getattr(self.engine, "mm", None))
             err = traceback.format_exc()
             self.store.update(
                 job_id, status="failed", error=err[-4000:], finished_at=time.time()
             )
             log.error("job %s failed:\n%s", job_id, err)
         finally:
+            if hasattr(self.engine, "memory") and not recover_memory:
+                try:
+                    self.engine.memory.observe()
+                except Exception:
+                    log.exception("failed to record GPU memory status")
             self.running_id = None
+        # The except block must be exited first: traceback frames can otherwise
+        # keep failed inference tensors alive while we try to release VRAM.
+        if recover_memory:
+            try:
+                state = self.engine.memory.recover()
+                self.store.update(
+                    job_id,
+                    error="GPU memory exhausted. Task stopped and cached models released. "
+                    "Try fewer references, a smaller output, or close other GPU programs.",
+                )
+                log.warning("job %s memory recovered: %s", job_id, state)
+            except Exception:
+                self.state = "error"
+                self.load_error = "GPU memory recovery failed; restart the server before running more jobs."
+                log.exception("GPU recovery failed; stopping inference worker")
+                self.store.update(job_id, error=self.load_error)

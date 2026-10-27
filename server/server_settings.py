@@ -11,7 +11,7 @@ MAX_PROMPT = 20000
 DURATION_RANGE = (2.0, 15.0)
 HISTORY_KINDS = {
     "video": ("t2v", "i2v", "fl2v", "r2v", "upscale"),
-    "image": ("t2i",),
+    "image": ("t2i", "i2i"),
     "music": ("t2m",),
     "3d": ("i23d",),
 }

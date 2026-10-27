@@ -2,7 +2,8 @@
 """Download every checkpoint the server uses into a ComfyUI models folder.
 
 The file list comes from server/model_catalog.py (base DiTs, text encoder, VAEs and
-every entry in LORAS, including FastH3 bases, plus MOSS-Image, MiniMax Music 3, upscalers and Pixal3D),
+every entry in LORAS, including FastH3 bases, plus the image_models.py catalog,
+MiniMax Music 3, upscalers and Pixal3D),
 so adding a LoRA there is enough for it to be prepared.
 Standard library only: run it with any Python 3.9+, no ComfyUI env needed.
 
@@ -16,6 +17,10 @@ ComfyUI itself and the larryvrh custom node are not installed by this script.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import shutil
+import subprocess
 import os
 import sys
 import time
@@ -26,13 +31,48 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
 from model_catalog import (  # noqa: E402
-    AUDIO_VAE, CLIP, PIXAL_FILES, FLASHVSR_DIR, FLASHVSR_FILES, FLASHVSR_NODE, FLASHVSR_REPO, LORAS, MOSS_CLIP, MOSS_REPO, MOSS_UNET, MOSS_VAE, MUSIC_CLIP, MUSIC_REPO, MUSIC_UNET,
-    MUSIC_VAE, SEEDVR2_REPO, SEEDVR2_UNET, SEEDVR2_VAE, UNETS, VIDEO_VAE,
+    AUDIO_VAE,
+    CLIP,
+    PIXAL_FILES,
+    FLASHVSR_DIR,
+    FLASHVSR_FILES,
+    FLASHVSR_NODE,
+    FLASHVSR_REPO,
+    LORAS,
+    MOSS_CLIP,
+    MOSS_REPO,
+    MOSS_UNET,
+    MOSS_VAE,
+    MUSIC_CLIP,
+    MUSIC_REPO,
+    MUSIC_UNET,
+    MUSIC_VAE,
+    SEEDVR2_REPO,
+    SEEDVR2_UNET,
+    SEEDVR2_VAE,
+    UNETS,
+    VIDEO_VAE,
 )
+
+from image_models import IMAGE_FILES, IMAGE_CHECKSUMS
 
 COMFY_REPO = "Comfy-Org/MiniMax-H3"
 LARRYVRH_NODE = "custom_nodes/ComfyUI-MiniMax-H3-Turbo"
-GROUPS = ("shared", "fl2va", "ref2va", "lightx2v", "larryvrh", "fasth3", "image", "music", "upscale", "flashvsr", "pixal3d")
+GROUPS = (
+    "shared",
+    "fl2va",
+    "ref2va",
+    "lightx2v",
+    "larryvrh",
+    "fasth3",
+    "image",
+    "music",
+    "upscale",
+    "flashvsr",
+    "pixal3d",
+    "klein",
+    "qwen-image",
+)
 
 
 def manifest():
@@ -42,30 +82,83 @@ def manifest():
         ("shared", COMFY_REPO, f"vae/{VIDEO_VAE}", "vae", VIDEO_VAE),
         ("shared", COMFY_REPO, f"vae/{AUDIO_VAE}", "vae", AUDIO_VAE),
     ]
-    items += [(family, COMFY_REPO, f"diffusion_models/{name}", "diffusion_models", name)
-              for family, name in UNETS.items()]
+    items += [
+        (family, COMFY_REPO, f"diffusion_models/{name}", "diffusion_models", name)
+        for family, name in UNETS.items()
+    ]
     for lora in LORAS.values():
         if lora.get("unet"):  # FastH3: its own base, no LoRA
-            items.append(("fasth3", lora["unet_source"], f"diffusion_models/{lora['unet']}",
-                          "diffusion_models", lora["unet"]))
+            items.append(
+                (
+                    "fasth3",
+                    lora["unet_source"],
+                    f"diffusion_models/{lora['unet']}",
+                    "diffusion_models",
+                    lora["unet"],
+                )
+            )
         if lora["file"]:
             group = "larryvrh" if lora["loader"] == "larryvrh" else "lightx2v"
             items.append((group, lora["source"], lora["file"], "loras", lora["file"]))
     items += [
-        ("image", MOSS_REPO, f"diffusion_models/{MOSS_UNET}", "diffusion_models", MOSS_UNET),
+        (
+            "image",
+            MOSS_REPO,
+            f"diffusion_models/{MOSS_UNET}",
+            "diffusion_models",
+            MOSS_UNET,
+        ),
         ("image", MOSS_REPO, f"text_encoders/{MOSS_CLIP}", "text_encoders", MOSS_CLIP),
         ("image", MOSS_REPO, f"vae/{MOSS_VAE}", "vae", MOSS_VAE),
-        ("music", MUSIC_REPO, f"diffusion_models/{MUSIC_UNET}", "diffusion_models", MUSIC_UNET),
-        ("music", MUSIC_REPO, f"text_encoders/{MUSIC_CLIP}", "text_encoders", MUSIC_CLIP),
+        (
+            "music",
+            MUSIC_REPO,
+            f"diffusion_models/{MUSIC_UNET}",
+            "diffusion_models",
+            MUSIC_UNET,
+        ),
+        (
+            "music",
+            MUSIC_REPO,
+            f"text_encoders/{MUSIC_CLIP}",
+            "text_encoders",
+            MUSIC_CLIP,
+        ),
         ("music", MUSIC_REPO, f"vae/{MUSIC_VAE}", "vae", MUSIC_VAE),
-        ("upscale", SEEDVR2_REPO, f"diffusion_models/{SEEDVR2_UNET}", "diffusion_models", SEEDVR2_UNET),
+        (
+            "upscale",
+            SEEDVR2_REPO,
+            f"diffusion_models/{SEEDVR2_UNET}",
+            "diffusion_models",
+            SEEDVR2_UNET,
+        ),
         ("upscale", SEEDVR2_REPO, f"vae/{SEEDVR2_VAE}", "vae", SEEDVR2_VAE),
     ]
-    items += [("flashvsr", FLASHVSR_REPO, name, FLASHVSR_DIR, name) for name in FLASHVSR_FILES]
-    items += [("pixal3d", repo, f"{sub}/{name}", sub, name) for repo, sub, name in PIXAL_FILES]
+    items += [
+        ("flashvsr", FLASHVSR_REPO, name, FLASHVSR_DIR, name) for name in FLASHVSR_FILES
+    ]
+    items += [
+        ("pixal3d", repo, f"{sub}/{name}", sub, name) for repo, sub, name in PIXAL_FILES
+    ]
+    items += IMAGE_FILES
     # A LoRA or FastH3 base belongs to its family too, so skipping "ref2va" also skips the ref2v ones.
-    families = {lora[k]: lora["family"] for lora in LORAS.values() for k in ("file", "unet") if lora.get(k)}
-    return [(g, repo, path, sub, name, families.get(name)) for g, repo, path, sub, name in items]
+    families = {
+        lora[k]: lora["family"]
+        for lora in LORAS.values()
+        for k in ("file", "unet")
+        if lora.get(k)
+    }
+    return [
+        (
+            g,
+            repo,
+            path,
+            sub,
+            name,
+            ("image" if g in ("klein", "qwen-image") else families.get(name)),
+        )
+        for g, repo, path, sub, name in items
+    ]
 
 
 def human(n):
@@ -75,15 +168,66 @@ def human(n):
         n /= 1024
 
 
-def download(url, dest):
+def verify_checksum(path, expected_sha256):
+    if not expected_sha256:
+        return
+    digest = hashlib.sha256()
+    with path.open("rb") as inp:
+        while chunk := inp.read(8 << 20):
+            digest.update(chunk)
+    if digest.hexdigest() != expected_sha256:
+        raise IOError(f"SHA256 mismatch for {path.name}")
+    print(f"    {path.name}: SHA256 verified", flush=True)
+
+
+def download(url, dest, expected_sha256=None, connections=1):
     part = dest.with_name(dest.name + ".part")
+    if connections > 1:
+        aria2 = shutil.which("aria2c")
+        if not aria2:
+            raise RuntimeError(
+                "--connections > 1 requires aria2c; use --connections 1 for urllib"
+            )
+        if os.environ.get("HF_TOKEN"):
+            raise RuntimeError(
+                "use --connections 1 with HF_TOKEN to keep tokens out of process arguments"
+            )
+        subprocess.run(
+            [
+                aria2,
+                "--continue=true",
+                "--auto-file-renaming=false",
+                "--allow-overwrite=true",
+                "--file-allocation=none",
+                f"--max-connection-per-server={connections}",
+                f"--split={connections}",
+                "--min-split-size=8M",
+                "--console-log-level=warn",
+                "--summary-interval=20",
+                "--max-tries=5",
+                "--retry-wait=3",
+                f"--dir={dest.parent}",
+                f"--out={part.name}",
+                url,
+            ],
+            check=True,
+        )
+        verify_checksum(part, expected_sha256)
+        part.rename(dest)
+        return
+    if part.with_name(part.name + ".aria2").exists():
+        raise IOError(
+            f"{part.name} has segmented resume data; rerun with --connections 8"
+        )
     have = part.stat().st_size if part.exists() else 0
     headers = {"User-Agent": "minimax-h3-studio"}
     if have:
         headers["Range"] = f"bytes={have}-"
     if os.environ.get("HF_TOKEN"):
         headers["Authorization"] = f"Bearer {os.environ['HF_TOKEN']}"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as resp:
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers), timeout=60
+    ) as resp:
         if have and resp.status != 206:  # server ignored the range: start over
             have = 0
         total = have + int(resp.headers.get("Content-Length") or 0)
@@ -97,26 +241,63 @@ def download(url, dest):
                 if now - last > 2 or done == total:
                     last = now
                     pct = f"{done / total:6.1%}" if total else ""
-                    print(f"\r    {pct} {human(done)} / {human(total)}", end="", flush=True)
+                    print(
+                        f"\r    {dest.name}: {pct} {human(done)} / {human(total)}",
+                        end="",
+                        flush=True,
+                    )
     print()
     if total and done != total:
         raise IOError(f"incomplete download: {done} of {total} bytes; rerun to resume")
+    verify_checksum(part, expected_sha256)
     part.rename(dest)
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--comfyui", default=os.environ.get("H3_COMFYUI"),
-                   help="ComfyUI checkout (default: $H3_COMFYUI)")
-    p.add_argument("--skip", nargs="*", default=[], choices=GROUPS, metavar="GROUP",
-                   help=f"groups to leave out: {', '.join(GROUPS)}")
-    p.add_argument("--only", nargs="+", choices=GROUPS, help="download only these groups")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--comfyui",
+        default=os.environ.get("H3_COMFYUI"),
+        help="ComfyUI checkout (default: $H3_COMFYUI)",
+    )
+    p.add_argument(
+        "--skip",
+        nargs="*",
+        default=[],
+        choices=GROUPS,
+        metavar="GROUP",
+        help=f"groups to leave out: {', '.join(GROUPS)}",
+    )
+    p.add_argument(
+        "--connections",
+        type=int,
+        choices=range(1, 9),
+        default=1,
+        help="connections per file (2-8 requires aria2c)",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        choices=range(1, 9),
+        default=1,
+        help="parallel downloads (1-8, default 1)",
+    )
+    p.add_argument(
+        "--only", nargs="+", choices=GROUPS, help="download only these groups"
+    )
     p.add_argument("--list", action="store_true", help="print the files and exit")
     args = p.parse_args()
 
     endpoint = (os.environ.get("HF_ENDPOINT") or "https://huggingface.co").rstrip("/")
-    items = [it for it in manifest() if it[0] not in args.skip and it[5] not in args.skip
-             and (not args.only or it[0] in args.only)]
+    items = [
+        it
+        for it in manifest()
+        if it[0] not in args.skip
+        and it[5] not in args.skip
+        and (not args.only or it[0] in args.only or it[5] in args.only)
+    ]
 
     if args.list or not args.comfyui:
         for group, repo, path, sub, name, _ in items:
@@ -129,28 +310,54 @@ def main():
     if not models.is_dir():
         p.error(f"{models} does not exist; point --comfyui at a ComfyUI checkout")
 
-    failed = []
-    for i, (group, repo, path, sub, name, _) in enumerate(items, 1):
+    def fetch(item):
+        i, (group, repo, path, sub, name, _) = item
         dest = models / sub / name
-        if dest.exists():
-            print(f"[{i}/{len(items)}] ok      {sub}/{name}")
-            continue
-        print(f"[{i}/{len(items)}] fetch   {sub}/{name}  ({repo})")
-        dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            download(f"{endpoint}/{repo}/resolve/main/{path}", dest)
-        except Exception as e:  # keep going; the .part file lets a rerun resume
-            print(f"\n    failed: {e}")
-            failed.append(name)
+            if dest.exists():
+                verify_checksum(dest, IMAGE_CHECKSUMS.get(name))
+                print(f"[{i}/{len(items)}] ok      {sub}/{name}")
+                return None
+            print(f"[{i}/{len(items)}] fetch   {sub}/{name}  ({repo})")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            download(
+                f"{endpoint}/{repo}/resolve/main/{path}",
+                dest,
+                IMAGE_CHECKSUMS.get(name),
+                args.connections,
+            )
+        except Exception as e:
+            print(f"\n    failed {name}: {e}")
+            return name
+        return None
 
-    if (not args.only or "larryvrh" in args.only) and "larryvrh" not in args.skip and not (Path(args.comfyui).expanduser() / LARRYVRH_NODE).is_dir():
-        print(f"\nnote: the larryvrh LoRA also needs its ComfyUI node:\n"
-              f"    git clone https://github.com/larryvrh/ComfyUI-MiniMax-H3-Turbo {args.comfyui}/{LARRYVRH_NODE}")
-    if (not args.only or "flashvsr" in args.only) and "flashvsr" not in args.skip and not (Path(args.comfyui).expanduser() / "custom_nodes" / FLASHVSR_NODE).is_dir():
-        print(f"\nnote: FlashVSR upscaling also needs its ComfyUI node:\n"
-              f"    git clone https://github.com/T8mars/{FLASHVSR_NODE} {args.comfyui}/custom_nodes/{FLASHVSR_NODE}")
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        failed = [name for name in pool.map(fetch, enumerate(items, 1)) if name]
+
+    if (
+        (not args.only or "larryvrh" in args.only)
+        and "larryvrh" not in args.skip
+        and not (Path(args.comfyui).expanduser() / LARRYVRH_NODE).is_dir()
+    ):
+        print(
+            f"\nnote: the larryvrh LoRA also needs its ComfyUI node:\n"
+            f"    git clone https://github.com/larryvrh/ComfyUI-MiniMax-H3-Turbo {args.comfyui}/{LARRYVRH_NODE}"
+        )
+    if (
+        (not args.only or "flashvsr" in args.only)
+        and "flashvsr" not in args.skip
+        and not (
+            Path(args.comfyui).expanduser() / "custom_nodes" / FLASHVSR_NODE
+        ).is_dir()
+    ):
+        print(
+            f"\nnote: FlashVSR upscaling also needs its ComfyUI node:\n"
+            f"    git clone https://github.com/T8mars/{FLASHVSR_NODE} {args.comfyui}/custom_nodes/{FLASHVSR_NODE}"
+        )
     if failed:
-        print(f"\n{len(failed)} download(s) failed: {', '.join(failed)}; rerun to resume.")
+        print(
+            f"\n{len(failed)} download(s) failed: {', '.join(failed)}; rerun to resume."
+        )
         sys.exit(1)
     print("\nall models ready")
 

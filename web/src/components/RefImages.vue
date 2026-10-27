@@ -5,7 +5,7 @@ import { PhPlus, PhX } from '@phosphor-icons/vue'
 // v-model is a list of { id, file, desc }; position i is <Picture i+1> (or <Video i+1> with `video`) and
 // <Subject first+i> in the prompt.
 const items = defineModel({ type: Array, default: () => [] })
-const props = defineProps({ max: { type: Number, default: 6 }, video: Boolean, first: { type: Number, default: 1 } })
+const props = defineProps({ max: { type: Number, default: 6 }, video: Boolean, subjects: { type: Boolean, default: true }, first: { type: Number, default: 1 } })
 const kind = props.video ? 'video' : 'image'
 const noun = props.video ? 'Video' : 'Picture'
 
@@ -42,12 +42,13 @@ function remove(id) {
         <video v-if="video" :src="previews[it.id]" muted loop playsinline preload="metadata"
           @mouseenter="$event.target.play()" @mouseleave="$event.target.pause()" />
         <img v-else :src="previews[it.id]" :alt="`Reference ${i + 1}`" />
-        <span class="badge mono">{{ noun }} {{ i + 1 }} · Subject {{ first + i }}</span>
+        <span class="badge mono">{{ noun }} {{ i + 1 }}<template v-if="subjects"> · Subject {{ first + i }}</template></span>
         <button type="button" class="btn icon remove" :aria-label="`Remove reference ${i + 1}`" @click="remove(it.id)">
           <PhX :size="13" weight="bold" />
         </button>
       </div>
       <input
+        v-if="subjects"
         v-model="it.desc"
         class="input desc"
         type="text"

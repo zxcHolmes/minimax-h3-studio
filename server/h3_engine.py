@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "comfy_launcher"))
 from run_h3 import bootstrap_comfy, load_larryvrh_nodes
 from engine_errors import Canceled
+from runtime_memory import MemoryPolicy
 from model_catalog import AUDIO_VAE, CLIP, DEFAULT_LORAS, LORAS, VIDEO_VAE, unet_file
 from pipelines import video, picture, music, seedvr2, flashvsr, pixal, media
 
@@ -20,11 +21,13 @@ class H3Engine:
     def __init__(self, comfyui_path, comfy_argv):
         self.comfyui_path = comfyui_path
         self.comfy_argv = comfy_argv
+        self.memory = MemoryPolicy(self)
         self._models = {}
         self.family = None
         self.unet = None
         self.base = None
         self._moss = None
+        self._picture_model = self._picture_models = None
         self._music = None
         self._seedvr2 = None
         self._flashvsr = None
@@ -82,6 +85,13 @@ class H3Engine:
         self._turbo = None
         self._use_base(DEFAULT_LORAS["fl2va"]["544p"])
 
+    def _prepare_task(self, task):
+        self._cancel = False
+        self.mm.interrupt_current_processing(False)
+        self.memory.prepare(task)
+        # A cancel received during a slow offload must survive pipeline setup.
+        self._check()
+
     def _sampler(self, name):
         if name not in self._samplers:
             self._samplers[name] = self.n["KSamplerSelect"].execute(name)[0]
@@ -95,11 +105,11 @@ class H3Engine:
         if self.base is not None:
             # Drop every reference to the old DiT (its clones share its weights)
             # so ComfyUI can release the VRAM and the process can release the RAM.
+            self.mm.unload_model_and_clones(self.base)
             self._models.clear()
             self.base = None
             self.unet = None
             self.family = None
-            self.mm.unload_all_models()
             gc.collect()
             self.mm.soft_empty_cache()
         self.base = self.nodes.UNETLoader().load_unet(unet, "default")[0]
@@ -115,9 +125,13 @@ class H3Engine:
         everything else off the GPU. The next job reloads what it needs. Call from the worker thread when idle."""
         import torch
 
+        self.memory.reset()
+        if self._flashvsr is not None:
+            self._flashvsr.release()
         self._models.clear()
         self.base = self.unet = self.family = None
         self._moss = self._music = self._seedvr2 = self._flashvsr = self._pixal = None
+        self._picture_model = self._picture_models = None
         self.mm.unload_all_models()
         gc.collect()
         self.mm.soft_empty_cache()
@@ -218,6 +232,7 @@ class H3Engine:
         thumb_path,
         on_progress,
     ):
+        self._prepare_task(("video", unet_file(lora)))
         return video.generate(
             self,
             lora=lora,
@@ -241,10 +256,23 @@ class H3Engine:
         )
 
     def generate_image(
-        self, *, prompt, width, height, seed, image_path, thumb_path, on_progress
+        self,
+        *,
+        prompt,
+        width,
+        height,
+        seed,
+        image_path,
+        thumb_path,
+        on_progress,
+        image_model="moss",
+        ref_paths=(),
     ):
+        self._prepare_task(("image", image_model))
         return picture.generate_image(
             self,
+            image_model=image_model,
+            ref_paths=ref_paths,
             prompt=prompt,
             width=width,
             height=height,
@@ -257,6 +285,7 @@ class H3Engine:
     def generate_music(
         self, *, caption, lyrics, duration, seed, audio_path, on_progress
     ):
+        self._prepare_task(("music",))
         return music.generate_music(
             self,
             caption=caption,
@@ -270,6 +299,7 @@ class H3Engine:
     def upscale_video(
         self, *, source_path, width, height, seed, video_path, thumb_path, on_progress
     ):
+        self._prepare_task(("seedvr2",))
         return seedvr2.upscale_video(
             self,
             source_path=source_path,
@@ -284,6 +314,7 @@ class H3Engine:
     def flashvsr_video(
         self, *, source_path, width, height, seed, video_path, thumb_path, on_progress
     ):
+        self._prepare_task(("flashvsr",))
         return flashvsr.flashvsr_video(
             self,
             source_path=source_path,
@@ -314,4 +345,5 @@ class H3Engine:
         return media._save_thumb(frame=frame, path=path)
 
     def generate_3d(self, **kwargs):
+        self._prepare_task(("pixal3d",))
         return pixal.generate_3d(self, **kwargs)

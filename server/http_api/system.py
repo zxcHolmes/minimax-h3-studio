@@ -2,6 +2,7 @@
 
 import logging
 from aiohttp import web
+from image_models import IMAGE_MODELS, picture_size
 import asyncio
 from model_catalog import (
     ASPECT_RATIOS,
@@ -43,7 +44,7 @@ async def health(request):
             "loaded_models": [
                 label
                 for attr, label in (
-                    ("_moss", "MOSS-Image"),
+                    ("_picture_models", IMAGE_MODELS.get(getattr(worker.engine, "_picture_model", None), {}).get("label", "Picture model")),
                     ("_music", "MiniMax Music 3"),
                     ("_pixal", "Pixal3D"),
                     ("_seedvr2", "SeedVR2"),
@@ -53,6 +54,7 @@ async def health(request):
             ],
             "queued": len(request.app["store"].queued_ids()),
             "loaded_at": worker.loaded_at,
+            "memory": dict(worker.engine.memory.status) if hasattr(worker.engine, "memory") else None,
         }
     )
 
@@ -97,6 +99,11 @@ async def presets(request):
             "image": {
                 "sizes": {a: image_size(r) for a, r in ASPECT_RATIOS.items()},
                 "models": image_model_info(),
+                "default_model": "moss",
+                "choices": [{"id": key, "label": p["label"], "max_refs": p["max_refs"],
+                             "edit": bool(p["max_refs"]), "models": image_model_info(key),
+                             "sizes": {a: picture_size(key, ratio) for a, ratio in ASPECT_RATIOS.items()}}
+                            for key, p in IMAGE_MODELS.items()],
             },
             "music": {
                 "duration_range": MUSIC_DURATION_RANGE,

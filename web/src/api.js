@@ -9,8 +9,8 @@ export const api = {
   health: () => request('GET', '/api/health'),
   presets: () => request('GET', '/api/presets'),
   // One page of jobs, newest first, plus the total from X-Total-Count.
-  jobs: async (limit, offset = 0, kind = '') => {
-    const res = await fetch(`/api/jobs?limit=${limit}&offset=${offset}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`)
+  jobs: async (limit, offset = 0, kind = '', imageModel = '') => {
+    const res = await fetch(`/api/jobs?limit=${limit}&offset=${offset}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}${imageModel ? `&image_model=${encodeURIComponent(imageModel)}` : ''}`)
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     const items = await res.json()
     return { items, total: Number(res.headers.get('X-Total-Count') ?? items.length) }

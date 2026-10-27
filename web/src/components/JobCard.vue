@@ -7,10 +7,10 @@ import { shortModel } from '../models'
 import { PhCube, PhArrowCounterClockwise, PhDownloadSimple, PhFilmStrip, PhImage, PhMusicNotes, PhSpeakerHigh, PhStop, PhTrash, PhUserFocus, PhWarningCircle } from '@phosphor-icons/vue'
 
 const props = defineProps({ job: Object, now: Number, upscale: Object })
-const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'use-3d', 'upscale'])
+const emit = defineEmits(['cancel', 'remove', 'reuse', 'use-ref', 'use-frame', 'use-audio', 'use-3d', 'use-edit', 'upscale'])
 
 const STAGES = { loading: 'Loading model', composing: 'Writing the song', encoding: 'Reading the prompt', sampling: 'Generating picture and sound', decoding: 'Decoding video', saving: 'Saving file', reading: 'Reading the video', upscaling: 'Upscaling' }
-const MODES = { i23d: '3D', t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', t2m: 'Music', upscale: 'Upscale' }
+const MODES = { i23d: '3D', t2v: 'Text', i2v: 'First frame', fl2v: 'First + last', r2v: 'Reference', t2i: 'Picture', i2i: 'Image edit', t2m: 'Music', upscale: 'Upscale' }
 
 // Sampling dominates the run time, so it gets most of the bar.
 const SPANS = { loading: [0, 0], encoding: [0, 0.05], sampling: [0.05, 0.86], decoding: [0.86, 0.98], saving: [0.98, 1] }
@@ -25,7 +25,7 @@ const FLASHVSR_SPANS = { loading: [0, 0.03], upscaling: [0.03, 0.98], saving: [0
 const is3D = computed(() => props.job.mode === 'i23d')
 const MESH_STAGES = { preprocessing: 'Preparing the object', structure: 'Generating structure', shape: 'Generating shape', shape_detail: 'Refining geometry', texture: 'Generating materials', meshing: 'Baking textures' }
 const MESH_SPANS = { loading: [0, 0], preprocessing: [0, .08], structure: [.08, .18], shape: [.18, .35], shape_detail: [.35, .62], texture: [.62, .85], meshing: [.85, .99], saving: [.99, 1] }
-const isPicture = computed(() => props.job.mode === 't2i')
+const isPicture = computed(() => ['t2i', 'i2i'].includes(props.job.mode))
 const isMusic = computed(() => props.job.mode === 't2m')
 const isUpscale = computed(() => props.job.mode === 'upscale')
 const overall = computed(() => {
@@ -163,9 +163,10 @@ onBeforeUnmount(() => observer?.disconnect())
               <PhFilmStrip :size="14" />Video
             </button>
             <template v-if="job.picture_url">
-              <a class="btn icon small" :href="job.picture_url" :download="`moss_${job.id}.png`" aria-label="Download" title="Download">
+              <a class="btn icon small" :href="job.picture_url" :download="`${job.image_model || 'moss'}_${job.id}.png`" aria-label="Download" title="Download">
                 <PhDownloadSimple :size="14" />
               </a>
+              <button class="btn small" title="Edit this picture with Klein or Qwen" @click="emit('use-edit', job)"><PhImage :size="14" />Edit</button>
               <button class="btn small" title="Turn this picture into a 3D model" @click="emit('use-3d', job)"><PhCube :size="14" />3D</button>
               <button class="btn small" title="Use as a reference image" @click="emit('use-ref', job)"><PhUserFocus :size="14" />Reference</button>
               <button class="btn small" title="Use as the first frame" @click="emit('use-frame', job)"><PhFilmStrip :size="14" />Frame</button>

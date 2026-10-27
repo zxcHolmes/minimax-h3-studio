@@ -1,6 +1,5 @@
 """Flashvsr pipeline and helpers."""
 
-import gc
 import sys
 import time
 from pathlib import Path
@@ -39,12 +38,6 @@ def flashvsr_video(
     engine.mm.interrupt_current_processing(False)
     on_progress("loading", 0.0)
     start = time.perf_counter()
-    # FlashVSR allocates with plain torch, outside ComfyUI's memory management, so the H3 / MOSS / music
-    # weights DynamicVRAM keeps resident after a job would leave it out of memory. Move them off the GPU
-    # first; their references stay, and the next job streams them back from mmap.
-    engine.mm.unload_all_models()
-    gc.collect()
-    engine.mm.soft_empty_cache()
     if engine._flashvsr is None:
         engine._flashvsr = runtime.ModelHandle(
             **FLASHVSR,

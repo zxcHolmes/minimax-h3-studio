@@ -1,23 +1,26 @@
 """Picture pipeline and helpers."""
 
 import time
-from model_catalog import IMAGE, MOSS_CLIP, MOSS_UNET, MOSS_VAE, image_model_info
+from image_models import IMAGE, image_model_info
 from engine_errors import Canceled
 
 
-def _moss_models(engine):
-    """(model, clip, vae) for pictures, loaded on first use and kept beside H3."""
-    if engine._moss is None:
-        model = engine.nodes.UNETLoader().load_unet(MOSS_UNET, "default")[0]
-        clip = engine.nodes.CLIPLoader().load_clip(MOSS_CLIP, "moss_image", "default")[
-            0
-        ]
-        vae = engine.nodes.VAELoader().load_vae(MOSS_VAE)[0]
-        engine._moss = (model, clip, vae)
-    return engine._moss
+from .image_runtime import picture_models
 
 
-def generate_image(
+def generate_image(engine, *, image_model="moss", ref_paths=(), **kwargs):
+    if image_model == "moss":
+        return _generate_moss(engine, **kwargs)
+    if image_model == "flux-klein-4b":
+        from .klein import generate_image as generate
+    elif image_model == "qwen-image-21-turbo":
+        from .qwen_image import generate_image as generate
+    else:
+        raise ValueError(f"unknown image model {image_model}")
+    return generate(engine, ref_paths=ref_paths, **kwargs)
+
+
+def _generate_moss(
     engine, *, prompt, width, height, seed, image_path, thumb_path, on_progress
 ):
     """Render one picture with MOSS-Image; returns the result record."""
@@ -43,7 +46,7 @@ def generate_image(
         with torch.inference_mode():
             if engine._moss is None:
                 stage("loading")
-            model, clip, vae = _moss_models(engine)
+            model, clip, vae = picture_models(engine, "moss")
             stage("encoding")
             positive = engine.nodes.CLIPTextEncode().encode(clip, prompt)[0]
             negative = engine.nodes.CLIPTextEncode().encode(clip, IMAGE["negative"])[0]

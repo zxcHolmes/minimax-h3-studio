@@ -107,5 +107,9 @@ def _save_thumb(frame, path):
 
     pixels = (frame.clamp(0, 1).cpu().float().numpy() * 255).round().astype(np.uint8)
     img = Image.fromarray(pixels)
+    if img.mode == "RGBA":
+        background = Image.new("RGB", img.size, "white")
+        background.paste(img, mask=img.getchannel("A"))
+        img = background
     img.thumbnail((640, 640))
     img.save(path, quality=85)

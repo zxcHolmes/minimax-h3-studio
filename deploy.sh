@@ -102,7 +102,7 @@ deploy_models() {
   need H3_COMFYUI
   echo "==> syncing the model list to $HOST:$REMOTE"
   remote "mkdir -p '$REMOTE/server' '$REMOTE/comfy_launcher' '$REMOTE/scripts'"
-  rsync -az server/model_catalog.py "$HOST:$REMOTE/server/"
+  rsync -az server/model_catalog.py server/image_models.py "$HOST:$REMOTE/server/"
   rsync -az scripts/prepare_models.py "$HOST:$REMOTE/scripts/"
   echo "==> downloading into $H3_COMFYUI/models (rerun to resume if interrupted)"
   local args="" envs=""

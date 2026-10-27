@@ -4,7 +4,7 @@ A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniM
 
 - **Text to video**, **image to video** (first frame, or first + last frame) and **references to video** (up to 6 images and 3 videos; a reference video passes on its motion, camera, scene and sound).
 - Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
-- **Picture generation** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), for making reference images and first frames; a finished picture goes into a video job with one click.
+- **Picture generation and editing** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B) (4 steps) and [Qwen Image 2.1 Turbo](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) (8 steps). Klein and Qwen edit input images; a finished picture goes into editing, video or 3D with one click.
 - **Image to 3D** with [Pixal3D](https://huggingface.co/Comfy-Org/Pixal3D): a single image becomes a textured GLB, with interactive rotation/zoom and download.
 - **Music generation** with [MiniMax Music 3](https://huggingface.co/Comfy-Org/MiniMax-Music-3): songs up to 5 minutes from a caption and lyrics.
 - **Upscaling** finished videos to 1080p or 1440p with [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) (fast) or [SeedVR2](https://huggingface.co/Comfy-Org/SeedVR2), keeping their sound.
@@ -138,7 +138,7 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 
 ## Models
 
-`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/model_catalog.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
+`./deploy.sh models` runs `scripts/prepare_models.py` on the GPU machine. It downloads exactly what the server is configured to use (the list comes from `server/model_catalog.py` and `server/image_models.py`), skips files that already exist and resumes interrupted downloads. You can also run it directly on the GPU machine; it needs only Python's standard library:
 
 ```bash
 python3 scripts/prepare_models.py --comfyui /path/to/ComfyUI
@@ -146,7 +146,7 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `music`, `upscale`, `flashvsr`, `pixal3d`. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `klein`, `qwen-image`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -160,6 +160,12 @@ Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryv
 | `moss_image_sft_int8_convrot` (pictures) | `diffusion_models` | Comfy-Org/MOSS-Image | 5.4 GB |
 | `qwen3.5_9b_w4a8_gptq` (picture text encoder) | `text_encoders` | Comfy-Org/MOSS-Image | 7.3 GB |
 | `flux2-vae_small` (picture VAE) | `vae` | Comfy-Org/MOSS-Image | 0.25 GB |
+| `flux-2-klein-4b` (distilled, 4-step generation/editing; not Base) | `diffusion_models` | Comfy-Org/Flux-2-Klein-4B | 7.2 GB |
+| `qwen_3_4b` (Klein text encoder) | `text_encoders` | Comfy-Org/Flux-2-Klein-4B | 7.5 GB |
+| `flux2-vae-klein` (Klein VAE; source filename `flux2-vae`) | `vae` | Comfy-Org/Flux-2-Klein-4B | 0.31 GB |
+| `qwen_image_2.1_turbo_int8_convrot` (8-step generation/editing) | `diffusion_models` | Comfy-Org/Qwen-Image-2.1 | 6.8 GB |
+| `qwen3vl_8b_int8_convrot` (Qwen Image 2.1 text/vision encoder) | `text_encoders` | Comfy-Org/Qwen-Image-2.1 | 8.7 GB |
+| `qwen_image_2.1_vae_bf16` (Qwen Image 2.1 VAE) | `vae` | Comfy-Org/Qwen-Image-2.1 | 0.63 GB |
 | `minimax_music3_dit_int8_convrot` (music) | `diffusion_models` | Comfy-Org/MiniMax-Music-3 | 2.5 GB |
 | `minimax_music3_text_encoder_pruned_int8_convrot` (music text encoder) | `text_encoders` | Comfy-Org/MiniMax-Music-3 | 9.2 GB |
 | `minimax_music3_dav` (music VAE) | `vae` | Comfy-Org/MiniMax-Music-3 | 0.22 GB |
@@ -173,6 +179,14 @@ Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryv
 | `moge_2_vitl_normal_fp16` (3D camera estimation) | `geometry_estimation` | Comfy-Org/MoGe | 0.62 GB |
 | `birefnet` (3D background removal) | `background_removal` | Comfy-Org/BiRefNet | 0.41 GB |
 
+The Klein and Qwen Turbo additions require approximately **31.1 GiB (33.4 GB)** in total. Table sizes are approximate binary gigabytes. Klein files are stored under `split_files/` in its Hugging Face repository; its VAE is saved as `flux2-vae-klein.safetensors` to preserve any pre-existing `flux2-vae.safetensors`; the downloader maps them into ComfyUI's normal model folders. Only the distilled `flux-2-klein-4b` and standalone Qwen Turbo checkpoint are downloaded; the full-step Base models, extracted Turbo LoRA and optional prompt-enhancement encoders are excluded.
+
+```bash
+HF_ENDPOINT=https://hf-mirror.com ./deploy.sh models --only klein qwen-image --workers 4
+```
+
+Downloads resume from `.part` files and the six new files are verified against their official SHA256 checksums before being made available. `--workers` controls concurrent downloads (1–8, default 1). For parallel connections within each file, install `aria2c` and add `--connections 8`; the default uses only the Python standard library. Segmented `.part.aria2` downloads must be resumed with `--connections` greater than one. Existing files in these two new groups are also checked against the pinned hashes. Allow at least 35 GiB of additional free space for these two model groups; generated images and other data need their own space.
+
 The models are under their own licenses (MiniMax-H3 Community License for the base checkpoints); review them before use.
 
 ## Using the studio
@@ -182,7 +196,9 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 | Text | fl2va | prompt |
 | Frames | fl2va | first frame, optional last frame |
 | Reference | FastH3 OmniRef (ref2va) | prompt, optional reference images (up to 6) and videos (up to 3) |
-| Picture | MOSS-Image | prompt (no video, no sound) |
+| Picture / MOSS-Image | MOSS-Image | prompt; generation only |
+| Picture / FLUX.2 Klein 4B | distilled 4-step Klein | prompt; optional input images for editing |
+| Picture / Qwen Image 2.1 Turbo | 8-step Turbo int8 | prompt; optional input images for editing |
 | Music | MiniMax Music 3 | caption, optional lyrics, maximum length (no video) |
 | Image to 3D | Pixal3D | one image; textured GLB output |
 
@@ -211,7 +227,7 @@ Models come in two groups. **MiniMax-H3 + LoRA** runs the fl2va base model with 
 
 Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base; they smeared fast motion (swinging sleeves, blades) into streaks even at 6–8 steps, so they were removed in favour of OmniRef. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
-**Pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). Write the prompt as a detailed English caption; the template's LLM prompt expansion is not used (it took ~45 s and made results worse), since the agent or person writing prompts already does that. A picture takes about 16 s on a 4090 (13 s of sampling); the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. Editing pictures is not supported.
+**MOSS-Image pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). Write the prompt as a detailed English caption; the template's LLM prompt expansion is not used (it took ~45 s and made results worse), since the agent or person writing prompts already does that. A picture takes about 10–16 s on a 4090 depending on the prompt; the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. MOSS supports generation only; use Klein or Qwen below for image editing.
 
 ![Picture mode](doc/screenshots/picture.webp)
 
@@ -220,6 +236,29 @@ Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base;
 **Music** uses MiniMax Music 3 (int8 DiT and text encoder) with the settings of the ComfyUI template: the text encoder writes the acoustic tokens from the caption and lyrics (cfg 1.7, top-k 50), then 30 euler steps at cfg 1.7 and a tiled VAE decode; the result is saved as mp3 (V0). Write the caption in three parts (Global Metadata: genre, BPM, key, mood; Vocal Details; Arrangement); lyrics take section tags such as `[Verse]`, `[Chorus]`, `[Instrumental]`, and an empty lyrics field gives an instrumental. The length is a maximum from 10 s to 5 min; the model may end the song earlier. A 60 s song takes about 100 s on a 4090 (about 70 s writing the acoustic tokens, 28 s sampling); time grows with the actual length, roughly 1.3 s per second of music plus 20 s. The first music job also loads the models; they stay resident next to the video and picture models. The form estimates how long the lyrics need and warns, with a one-click fix, when the maximum length would cut the song off.
 
 ![Music mode with lyrics and the length warning](doc/screenshots/music.webp)
+
+### GPU memory and model residency
+
+Healthy consecutive jobs reuse their model objects and warm GPU weights; there is no idle timer that clears the cache. Before each job, `runtime_memory.py` checks ComfyUI's available memory (including reusable allocator cache) against its native minimum inference headroom. With enough space, managed video/image/music/upscale tasks keep resident weights and let DynamicVRAM size allocations per node. Under pressure, ComfyUI offloads only as much as needed, then falls back to a full GPU offload. If headroom is still unavailable, the job fails before model loading.
+
+Changing the image model or video base releases only the old model family and its clones. Entering Pixal3D or FlashVSR releases ComfyUI GPU weights because their mesh/upscale kernels also allocate outside DynamicVRAM; CPU model objects remain cached. Pixal3D still frees GPU weights before meshing, and the upstream FlashVSR runtime returns its private pipeline to CPU between runs for safety.
+
+An OOM stops the current job and releases its inference frames and cached models without an automatic retry. The next queued job can proceed after successful recovery. If cleanup fails, the inference worker stops and health reports an error requiring a service restart; queued jobs stay in the database. `/api/health` includes the last worker memory snapshot and its action (`retained`, `reclaimed`, `offloaded_for_external`, or recovery). `POST /api/unload` remains available while idle for explicitly freeing the GPU.
+
+### Image generation and editing models
+
+The Image navigation category separates **MOSS-Image**, **FLUX.2 Klein 4B** and **Qwen Image 2.1 Turbo**. Klein and Qwen each support text-to-image and image editing with up to four input images in this studio. Their fast weights serve both tasks, and output images can be sent into another edit or into video/3D generation. Each model has a separate draft and filtered history; existing picture jobs remain assigned to MOSS-Image.
+
+- **Klein** follows the [official distilled workflow](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_flux2_klein_image_edit_4b_distilled.json): four Euler steps, CFG 1, `Flux2Scheduler`, Qwen3 4B text encoding, and VAE reference latents for edits. It uses `flux-2-klein-4b.safetensors`, never the `base-4b` checkpoint.
+- **Qwen 2.1 Turbo** follows the [official Turbo generation](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_t2i.json) and [editing workflows](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json): eight Euler steps, CFG 1 and the exact manual sigma ladder `1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`. `TextEncodeQwenImage21` handles text/vision conditioning and reference latents; edits follow the first input's canvas, and the native KV cache stays on auto/default. Optional prompt enhancement is omitted for lower latency.
+
+Measured on the RTX 4090 at 1024×1024 with seed 42: Klein generation about 4.3 s, single-image edit 2.9 s; Qwen Turbo generation 5.5 s, edit 4.6 s (including image model loading where needed, with the server already initialized). Both editing checks added a red scarf to the generated zebra while retaining its pose and markings. These are single-run measurements; resolution, reference count and prompt length affect latency.
+
+![FLUX.2 Klein 4B editing a zebra image](doc/screenshots/klein.webp)
+
+![Qwen Image 2.1 Turbo editing a zebra image](doc/screenshots/qwen.webp)
+
+API: `POST /api/jobs` with `kind=image`, `image_model` (`moss`, `flux-klein-4b`, `qwen-image-21-turbo`), `prompt`, optional `seed`, and an aspect ratio for generation. Add repeatable `ref_image` files (or a single `image`) to create an edit (`mode=i2i`); otherwise the mode is `t2i`. `aspect_ratio=image` follows the first reference, which is required for Qwen edits. References are kept around one megapixel; image editing here uses instructions and reference images rather than a mask/inpainting tool.
 
 ### Image to 3D (Pixal3D)
 
@@ -245,7 +284,7 @@ API: `POST /api/jobs` with multipart `kind=3d`, required `image`, optional `seed
 
 `server/app.py` only assembles the aiohttp application and starts the service. `server_settings.py` reads environment variables and owns the data paths; each application receives its own settings instead of mutating module globals. HTTP handlers are grouped under `http_api/`, multipart form builders under `job_forms/`, file validation/storage in `job_uploads.py`, job serialization in `job_views.py`, and the FIFO worker in `job_worker.py`. SQLite persistence remains in `h3_jobs.py`.
 
-`model_catalog.py` is the standard-library-only registry for checkpoints, LoRAs, inference defaults and size helpers. The model downloader imports it directly. `h3_engine.py` owns ComfyUI bootstrap, model caches, VRAM lifecycle and cancellation; the individual video, picture, music, SeedVR2, FlashVSR and Pixal3D implementations live in `pipelines/`, alongside shared media helpers. GPU libraries are imported when a pipeline runs, after ComfyUI bootstrap. Add new model choices in the catalog, and new task-family pipelines separately from HTTP handling.
+`model_catalog.py` is the standard-library-only video/shared registry; `image_models.py` separately owns picture model choices, capabilities, defaults and checksum-pinned downloads. The model downloader imports it directly. `h3_engine.py` owns ComfyUI bootstrap, model caches, VRAM lifecycle and cancellation; the individual video, picture, music, SeedVR2, FlashVSR and Pixal3D implementations live in `pipelines/`, alongside shared media helpers. GPU libraries are imported when a pipeline runs, after ComfyUI bootstrap. Add new model choices in the catalog, and new task-family pipelines separately from HTTP handling.
 
 Run backend regression tests with the project's configured Python interpreter: `python -m unittest discover -s tests -v`. The tests use the real application factory with isolated settings and a stub engine, covering submission validation, task-family history, cancellation/deletion/upscaling, and dispatch to every pipeline.
 

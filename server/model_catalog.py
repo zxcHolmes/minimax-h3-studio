@@ -1,6 +1,7 @@
 """Model registry, inference defaults and size/prompt helpers. Standard library only."""
 
 import math
+from image_models import (IMAGE, IMAGE_AREA, MOSS_REPO, MOSS_UNET, MOSS_CLIP, MOSS_VAE, image_model_info)  # noqa: F401
 
 # Pixal3D native single-image pipeline (official Comfy-Org template).
 PIXAL_REPO = "Comfy-Org/Pixal3D"
@@ -146,20 +147,6 @@ CLIP = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 VIDEO_VAE = "minimax_h3_video_vae_int8_convrot.safetensors"
 AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 
-# Picture generation: MOSS-Image SFT with the settings of ComfyUI's MOSS-Image text-to-image template.
-MOSS_REPO = "Comfy-Org/MOSS-Image"
-MOSS_UNET = "moss_image_sft_int8_convrot.safetensors"
-MOSS_CLIP = "qwen3.5_9b_w4a8_gptq.safetensors"
-MOSS_VAE = "flux2-vae_small.safetensors"
-IMAGE = {
-    "steps": 25,
-    "cfg": 2.5,
-    "sampler": "er_sde",
-    "scheduler": "simple",
-    "negative": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact",
-}
-IMAGE_AREA = 1024 * 1024
-
 # Music generation: MiniMax Music 3 with the settings of ComfyUI's text-to-music template. The text encoder
 # writes the acoustic tokens autoregressively from caption + lyrics; the DiT then renders them.
 MUSIC_REPO = "Comfy-Org/MiniMax-Music-3"
@@ -279,19 +266,6 @@ def model_info(lora, strength=1.0, sampler=None, steps=None):
         "shift_video": p["shift_video"],
         "shift_audio": p["shift_audio"],
         "attention": f"VSA {vsa['keep']}%" if vsa else None,
-    }
-
-
-def image_model_info():
-    """What picture jobs run on, as shown to users."""
-    return {
-        "unet": MOSS_UNET,
-        "lora": None,
-        "lora_strength": None,
-        "steps": IMAGE["steps"],
-        "sampler": IMAGE["sampler"],
-        "cfg": IMAGE["cfg"],
-        "text_encoder": MOSS_CLIP,
     }
 
 

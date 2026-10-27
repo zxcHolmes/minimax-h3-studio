@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
-import { generationModes } from '../generationModes'
+import { generationModes, imageMode } from '../generationModes'
 import VideoForm from './forms/VideoForm.vue'
 import PictureForm from './forms/PictureForm.vue'
 import MusicForm from './forms/MusicForm.vue'
@@ -20,7 +20,7 @@ const child = ref(null)
 const familyProps = computed(() => {
   const { picture, music, mesh, ready, ...video } = props
   return current.value.family === 'video' ? { ...video, ready, mode: mode.value }
-    : current.value.family === 'picture' ? { picture, aspects: props.aspects, ready }
+    : current.value.family === 'picture' ? { picture, aspects: props.aspects, ready, imageModel: current.value.imageModel }
       : current.value.family === 'music' ? { music, ready } : { mesh, ready }
 })
 async function route(targetMode, method, job) {
@@ -28,9 +28,17 @@ async function route(targetMode, method, job) {
   await nextTick()
   return child.value?.[method]?.(job)
 }
-function reuse(job) { return route(job.mode === 'fl2v' ? 'i2v' : job.mode, 'reuse', job) }
+function reuse(job) {
+  const mode = ['t2i', 'i2i'].includes(job.mode) ? imageMode(job.image_model) : job.mode === 'fl2v' ? 'i2v' : job.mode
+  return route(mode, 'reuse', job)
+}
+function useAsEdit(job) {
+  const choice = current.value.imageModel
+  return route(imageMode(choice && choice !== 'moss' ? choice : 'flux-klein-4b'), 'useAsEdit', job)
+}
 defineExpose({
   reuse,
+  useAsEdit,
   useAsRef: (job) => route('r2v', 'useAsRef', job),
   useAsFrame: (job) => route('i2v', 'useAsFrame', job),
   useAsAudio: (job) => route('t2v', 'useAsAudio', job),
@@ -42,7 +50,7 @@ defineExpose({
     <h2>{{ current.label }}</h2><span class="mono">{{ current.model }}</span>
   </div>
   <KeepAlive>
-    <component :is="forms[current.family]" :key="current.family" ref="child" v-bind="familyProps" @update:mode="mode = $event" @created="emit('created', $event)" />
+    <component :is="forms[current.family]" :key="current.imageModel || current.family" ref="child" v-bind="familyProps" @update:mode="mode = $event" @created="emit('created', $event)" />
   </KeepAlive>
 </template>
 <style scoped>

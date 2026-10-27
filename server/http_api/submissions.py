@@ -9,7 +9,8 @@ from .common import bad_request
 
 
 from job_forms.video import video_fields
-from job_forms.media import image_fields, music_fields
+from job_forms.media import music_fields
+from job_forms.picture import image_fields
 from job_forms.mesh import mesh_fields
 
 BUILDERS = {
@@ -51,7 +52,7 @@ def common_fields(form):
     if any(
         isinstance(form.get(f), web.FileField)
         for f in ("image", "last_image", "ref_image", "ref_video", "audio")
-    ) and kind in ("image", "music"):
+    ) and kind == "music":
         raise ValueError(f"{kind} jobs take no input images or audio")
 
     return kind, {

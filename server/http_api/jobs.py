@@ -1,6 +1,7 @@
 """Jobs endpoints."""
 
 from aiohttp import web
+from image_models import IMAGE_MODELS
 import random
 import time
 from model_catalog import UPSCALERS, UPSCALE_TARGETS, upscale_size
@@ -20,11 +21,14 @@ async def list_jobs(request):
         offset = max(int(request.query.get("offset", "0")), 0)
     except ValueError:
         return bad_request("limit and offset must be integers")
+    image_model = request.query.get("image_model")
+    if image_model is not None and (kind != "image" or image_model not in IMAGE_MODELS):
+        return bad_request("image_model requires kind=image and a known image model")
     modes = HISTORY_KINDS[kind] if kind else None
     positions = queue_positions(store)
     return web.json_response(
-        [job_view(j, positions) for j in store.list(limit, offset, modes=modes)],
-        headers={"X-Total-Count": str(store.count(modes=modes))},
+        [job_view(j, positions) for j in store.list(limit, offset, modes=modes, image_model=image_model)],
+        headers={"X-Total-Count": str(store.count(modes=modes, image_model=image_model))},
     )
 
 

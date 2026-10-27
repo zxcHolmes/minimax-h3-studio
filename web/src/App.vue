@@ -6,11 +6,11 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import GenerateForm from './components/GenerateForm.vue'
 import JobCard from './components/JobCard.vue'
 import ModeNav from './components/ModeNav.vue'
-import { generationModes, historyTypes, initialMode } from './generationModes'
+import { historyForMode, initialMode } from './generationModes'
 import Logo from './components/Logo.vue'
 
 const mode = ref(initialMode())
-const history = computed(() => historyTypes[generationModes.find((m) => m.id === mode.value)?.family] || historyTypes.video)
+const history = computed(() => historyForMode(mode.value))
 const composerScroll = ref(null)
 watch(mode, async (value) => {
   try { localStorage.setItem('h3.mode', value) } catch { /* storage */ }
@@ -73,7 +73,7 @@ async function refresh() {
   const version = ++refreshVersion
   clearTimeout(timer)
   try {
-    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE, history.value.kind)])
+    const [h, j] = await Promise.all([api.health(), api.jobs(PAGE_SIZE, (page.value - 1) * PAGE_SIZE, history.value.kind, history.value.imageModel)])
     if (version !== refreshVersion) return
     health.value = h
     total.value = j.total
@@ -92,7 +92,7 @@ async function refresh() {
   timer = setTimeout(refresh, active.value || !ready.value ? 1500 : 8000)
 }
 
-watch(() => history.value.kind, () => {
+watch(() => `${history.value.kind}:${history.value.imageModel || ""}`, () => {
   page.value = 1
   total.value = 0
   jobs.value = null
@@ -104,7 +104,7 @@ async function cancel(job) {
   refresh()
 }
 
-const OUTPUT = { i23d: '3D model', t2i: 'picture', t2m: 'song' }
+const OUTPUT = { i23d: '3D model', t2i: 'picture', i2i: 'picture', t2m: 'song' }
 
 async function remove(job) {
   const scene = job.prompt.match(/(?:integrated_multimodal_description|detailed_description):\s*([\s\S]*?)(\n\s*\n|$)/)
@@ -123,6 +123,11 @@ async function remove(job) {
 async function upscaleJob(job, upscaler, target) {
   await api.upscale(job.id, upscaler, target)
   created()
+}
+
+async function useEdit(job) {
+  await form.value?.useAsEdit(job)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 async function use3D(job) {
@@ -249,6 +254,7 @@ onUnmounted(() => { refreshVersion++; clearTimeout(timer); clearInterval(clock) 
           @use-frame="useFrame"
           @use-audio="useAudio"
           @use-3d="use3D"
+          @use-edit="useEdit"
           @upscale="upscaleJob"
         />
       </div>

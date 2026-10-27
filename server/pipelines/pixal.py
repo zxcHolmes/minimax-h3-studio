@@ -91,9 +91,6 @@ def generate_3d(
     try:
         with torch.inference_mode():
             stage("loading")
-            # Mesh kernels allocate outside DynamicVRAM: free the video models first.
-            engine.mm.unload_all_models()
-            engine.mm.soft_empty_cache()
             if engine._pixal is None:
                 model = call(
                     engine.nodes.UNETLoader().load_unet,

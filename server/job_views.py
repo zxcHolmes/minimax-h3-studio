@@ -30,8 +30,9 @@ def job_view(job, positions):
     stored = (job["result"] or {}).get("models")
     if job["mode"] == "i23d":
         view["models"] = stored or pixal_model_info()
-    elif job["mode"] == "t2i":
-        view["models"] = stored or image_model_info()
+    elif job["mode"] in ("t2i", "i2i"):
+        view["image_model"] = job["image_model"] or "moss"
+        view["models"] = stored or image_model_info(view["image_model"])
     elif job["mode"] == "t2m":
         view["models"] = stored or music_model_info()
     elif job["mode"] == "upscale":
