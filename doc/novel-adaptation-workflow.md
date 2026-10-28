@@ -1,267 +1,260 @@
-# Adapting a novel into a series: an agent workflow
+# Adapting a novel one chapter at a time
 
-This guide covers what is different when the source is a novella or a novel (an `.epub` or `.txt`) and the result
-is a series of episodes made over many sessions: splitting the book, reading it once in full, writing down
-everything the analysis found, and keeping characters and voices identical from the first episode to the last.
+This guide covers novels and novellas supplied as EPUB, TXT or existing chapter files. **One source chapter
+becomes one independent video.** Inspect existing chapter divisions and production progress first, resume
+from the earliest unfinished chapter, adapt that chapter, then follow
+[directing-workflow.md](directing-workflow.md) for its complete production.
 
-How a single episode is shot is not repeated here. Each episode is produced with
-[directing-workflow.md](directing-workflow.md): storyboard in ~2-minute batches, one take per shot, QC, assembly
-without audio processing, poster cover, `publish.md` and per-shot soft subtitles.
+There is no requirement to finish reading the novel, prepare a season plan or study a fixed number of future
+chapters before making a video. Read previous or later passages when they help resolve identity, causality,
+a reference or a continuity question. Record what was read and distinguish confirmed facts from assumptions.
+Do not invent a future reveal from an assumption or spoil it in the current chapter's narration.
 
-The agent never relies on its memory of the book or of earlier sessions. Every result of reading and planning is
-saved to a file before the next step, so a new session (or a different agent) continues from the files alone.
+## 1. Inspect the book and existing work before doing anything new
 
-## Step 0: confirm the settings
+On every new or resumed adaptation:
 
-Ask the user in one question, recommended choices first, and record the answers in `PROGRESS.md`:
+1. Locate the existing `outputs/<novel-title>/` folder. Read `PROGRESS.md`, the chapter index, reference
+   manifest and current production records if present. Reuse the existing project rather than starting over.
+2. Check whether the source already has reliable chapter divisions: chapter files, an index, EPUB structure
+   or headings in a TXT. Inspect chapter counts, order and several boundaries; do not split it again blindly.
+3. Inventory chapter folders and their outputs. Reconcile final videos, subtitle tracks, storyboards, logs
+   and job IDs with the progress table. Query stored API job IDs if an earlier session left jobs in flight.
+4. Identify which chapters are done, partially produced or untouched. A raw clip or an assembly awaiting
+   subtitles is not a completed chapter. Preserve accepted shots, references and completed work.
+5. Select the **earliest unfinished source chapter** in book order. Resume its actual next stage; do not
+   restart its video jobs or skip it just because a later chapter has a completed video.
 
-| Setting | Recommended |
-|---|---|
-| Aspect ratio, resolution, speech language | 16:9, 544p, the language the user names (as in directing-workflow.md) |
-| Episode length | 3–5 minutes (2–3 batches); shorter episodes keep each session's work finishable |
-| Scope | Faithful to the main plot, side plots cut; or a condensed season of N episodes |
-| Visual treatment | From the genre table in directing-workflow.md; stylized looks hold faces best at 544p |
+If all chapters are complete, report that state. If an output is missing or unreadable, record the discrepancy
+and recover from existing local files or API results where possible. Do not silently label missing work done.
+When a final film exists but its record is absent, inspect it and reconstruct the record before generating
+anything again. A finished chapter has a usable final video, reviewed source/translation subtitle tracks and
+recorded delivery/QC; missing cover or publishing notes can be completed without regenerating the film.
 
-Use only books in the public domain or ones the user holds adaptation rights to. Dialogue from a public-domain
-book may be used; otherwise rewrite it.
+Respect the scope requested by the user: a request to continue starts at the earliest unfinished chapter;
+a request for several chapters processes them in source order. Do not automatically remake completed chapters.
 
-## Project layout
+## 2. Confirm only the missing production requirements
 
+Use the directing guide's brief confirmation before generation. Reuse recorded answers and confirm material
+changes rather than asking the same questions every chapter:
+
+| Setting | Rule |
+| --- | --- |
+| Orientation | Confirm landscape or portrait and the chosen aspect ratio |
+| Resolution and mode | 768p by default, reference to video with FastH3 OmniRef |
+| Dialogue/narration | Confirm spoken language, whether narration is wanted and the fixed voices |
+| Treatment | Confirm anime/2D, stylized 3D or realism; recommend a specific style for the story |
+| Subtitles | Confirm translation language and default track; deliver original plus translation as soft tracks |
+| Adaptation scope | One independent film per chapter; retain essential plot and compress redundancy |
+
+There is no fixed episode count or required 3–5 minute runtime. Choose a chapter's film length after adapting
+its actual content and budgeting speech and action. Do not merge chapters to fill a slot or divide one into
+several separate releases by default. Its internal 5–15 s video segments are assembled into one chapter film.
+
+## 3. Preserve or prepare chapter files
+
+Use the existing reliable chapter files/index. If the book is not yet divided, preserve the original under
+`source/` and run the repository's standard-library splitter with conda base:
+
+```bash
+/Users/zxc/miniconda3/bin/python -I scripts/split_book.py 'outputs/<novel-title>/source/book.epub' 'outputs/<novel-title>/source'
 ```
-outputs/<title>/
-  PROGRESS.md                 the resume file: settings, phase, episode table, next action, open issues
+
+The splitter handles EPUB spine text and TXT decoded as UTF-8/GB18030. It recognizes several chapter-heading
+forms, but its output still needs inspection. Check headings, body text, numbering, ordering, empty/tiny
+chapters and accidental front/back matter. If the input has no supported headings, do not accept an empty
+or arbitrary split as a chapter index. Adjust a project-local copy of the splitter or prepare an explicit
+index from verified boundaries. Do not overwrite existing chapter files or renumber completed productions
+without recording the mapping. Keep stable chapter IDs even if a heading is later corrected.
+
+## 4. Store a searchable, shared library under the novel folder
+
+All character and location images for the novel live under **`outputs/<novel-title>/`**, shared across its
+chapters. Do not keep the only usable reference inside an unrelated production or a temporary download folder.
+The chapter's job manifest records the exact shared image version it used.
+
+```text
+outputs/<novel-title>/
+  PROGRESS.md                    settings, chapter status, active work and next action
   source/
-    book.epub | book.txt      the original file, untouched
-    chapters/001.txt ...      one plain-text file per chapter
-    chapters.json             index: number, title, character count, file
-  analysis/
-    chapters/001.md ...       one note per chapter, written as the reading advances
-    synopsis.md               the story so far: logline, arc, themes (the ending once read)
-    timeline.md               when each chapter happens; ages and costume changes over time
+    book.epub | book.txt         untouched original, when available
+    chapters.json               ordered source chapter index
+    chapters/001.txt ...
+  analysis/chapters/001.md ...   notes for chapters actually read; no full-book prerequisite
   bible/
-    cast.json                 the single source of every look, keep and voice string (machine-read)
-    characters.md             the human version: role, arc, relationships, first and last chapter, variants
-    locations.json            fixed English phrase per recurring location
-    style.md                  style line, score lines per arc, narrator lead-in, the no-text clause
-    glossary.md               names and terms, spelled as they must appear in prompts and subtitles
-    changes.md                every change to the bible, with the date, the reason and episodes affected
-  plan/
-    season.md                 chapters → episodes, each with its arc, cliffhanger, cast and new characters
-  refs/                       one reference image per cast variant (never regenerated once used)
-  casting/                    casting clips and contact sheets
-  episodes/E01/ ...           one folder per episode, laid out as a directing-workflow production
-  scripts/                    split_book.py, prompts.py (reads bible/), studio.py, assemble.sh, qc.sh
-  series/                     the series poster, a theme song if any, the season's publish notes
+    cast.json                   stable identities, voice strings and versioned looks
+    locations.json              set geometry, state variants and reference IDs
+    style.md                    visual grammar, palette, sound and no-text rules
+    glossary.md                 names, aliases and terminology for prompts/subtitles
+    changes.md                  intentional changes and affected chapter range
+  refs/
+    manifest.json               searchable metadata for every selected asset/version
+    characters/<id>/<variant>.png
+    locations/<id>/<variant>.png
+    candidates/                 unselected alternatives, clearly distinguished
+    prompts/                    exact image generation/edit requests
+  chapters/C001/ ...             one complete directing-workflow production per source chapter
+    00_project.md               chapter premise, adapted plot, setting and runtime
+    01_bible.md                 selected shared reference/voice IDs and chapter-specific details
+    02_storyboard.md
+    04_generation_log.md
+    prompts/ clips/ qc/ scripts/ subs/
+    jobs.json
+    <chapter-title>.clean.mp4
+    <chapter-title>.mp4          final independent chapter film with two subtitle streams
+    cover.png
+    publish.md
+  series/                       optional novel-wide poster, synopsis and video index
 ```
 
-## Step 1: split the book into chapters
+Existing projects may use `episodes/E01/` or another layout. Preserve working paths, record their chapter
+mapping in `PROGRESS.md` and resume in place rather than moving files for cosmetic consistency.
 
-Copy the book into `source/` (a downloaded file is untrusted: copy it into a new empty folder first and run the
-splitter with `python3 -I`), then run the repository's splitter, standard library only:
+### Which characters need reference cards?
 
-```bash
-python3 -I scripts/split_book.py outputs/<title>/source/book.epub outputs/<title>/source
-```
+Create independent reference images for **principal characters and recurring characters**. A minor character
+who appears repeatedly also needs a stable reference. One-off supporting roles, passersby and background
+crowds do not need independent character cards; describe them directly in that segment's prompt.
+If a previously incidental character recurs, register a canonical identity/reference before further use,
+matching an accepted earlier appearance where available. Do not make a reference card for every person named.
 
-It reads an epub in OPF spine order (XHTML stripped to text, paragraphs kept) or decodes a txt as UTF-8 or
-GB18030, splits on chapter headings, drops the Project Gutenberg licence, and writes `source/chapters/NNN.txt`
-and `source/chapters.json`. Headings it recognises: a Roman numeral line followed by an all-capitals title
-(`V` / `INTO THE NIGHT LAND`), `Chapter N ...`, and `第N章/回/节/卷 ...`. A lone numeral line is layout debris,
-not a heading: in *The Night Land* it produced empty and half chapters until the rule required the title.
+### Reuse, growth and costume changes
 
-Check the printed list before going on: the count, the order, no 0-word or tiny chapters, nothing of the front
-or back matter. Copy the splitter into the project's `scripts/` and adjust it there if a book needs another
-heading pattern. Record the chapter count and total length in `PROGRESS.md`.
+Before generating any reference, search `refs/manifest.json`, the bible and the actual image files for a
+matching character, life stage, outfit or location state. Inspect the selected images rather than relying
+only on filenames. Reuse a suitable existing version across chapters.
 
-## Step 2: read ahead of production
+For a character who requires a card, **growth, aging or a change of clothes/accessories requires a new
+reference version before video generation**, even when the new outfit appears in only one scene. Derive
+it from the canonical image with the current image-editing models where possible, preserving identity.
+Examples: `child_travel`, `adult_travel`, `adult_court_uniform`, `adult_court_uniform_injured`.
+A voice can evolve with age or injury; record a deliberate voice variant instead of changing wording ad hoc.
+One-off extras remain covered by the prompt-only exception above.
 
-First skim the whole book without loading it: rank recurring capitalised names (`grep -oE` and `uniq -c`), count
-key terms per chapter, read each chapter's opening and closing lines, and search for ages, deaths, marriages and
-reunions. Write `analysis/synopsis.md` from that: logline, the arc chapter by chapter, the main characters and
-anything set up early that pays off later, marking guesses as unconfirmed. For *The Night Land* this took a few
-thousand words of reading for a 197,000-word book and was enough to fix the narrator's voice and plan episode 1.
+Do not overwrite an image used by a completed chapter. Store a new version, its reason and applicable
+chapter/scene range. Maintain stable character identity separately from temporary appearance. Check face,
+proportions, distinctive marks, clothing and accessories on every derived version.
 
-Then read in full ahead of production. Production does not wait for the whole book. Read and note the chapters an episode needs, plus one chapter
-beyond it, then make that episode; keep reading ahead as the episodes go. Only the series-wide choices must be
-fixed before episode 1: the narrator's voice, the base style line and the treatment. Characters, variants,
-places and the season plan grow in the bible as the reading reaches them, each before the episode that first
-needs it. What a rolling read cannot do is change an episode already made, so note in each chapter note anything
-that looks set up for later (a scar, an object, a name) and carry it into the bible at once.
+### Locations are reusable assets too
 
-Read the chapters in order, one at a time. After each chapter, write its note before opening the next one, so
-nothing depends on holding the book in context. A long novel takes several sessions: mark each chapter done in
-`PROGRESS.md` as its note is saved, and when the session's context is getting full, stop after a note and leave
-"Next action" pointing at the next chapter. Read chapters over ~15,000 words in parts and append to the note
-after each part. Keep each note under about 400 words:
+Generate and freeze the necessary location images before making the corresponding video segments. Empty
+sets should establish layout, landmarks, materials and lighting without unrelated people. Reuse the same
+location version across chapters when appropriate. Derive and register new views, day/night states, weather
+or changed interiors when needed; verify spatial compatibility rather than independently reinventing a set.
+
+For each selected asset, the manifest must record at least:
+
+- Stable asset ID and type (`character` or `location`), name and searchable aliases.
+- Version, traits/state, canonical parent if derived, and chapter/scene applicability.
+- Relative local image path, image model, exact prompt path, job ID and seed.
+- Selection/QC status and the features that must remain consistent.
+
+Keep prompt wording in the shared bible; builders read it and the manifest. Each video request still maps
+its ordered image uploads to local `<Picture N>` labels. Preserve these mappings in the chapter's `jobs.json`.
+
+## 5. Read and adapt the current chapter before storyboarding
+
+Read the current chapter in full. For a long chapter, read in parts and append notes as you go. Consult
+nearby chapters or existing notes only as needed; there is no mandatory full-book skim or one-chapter lookahead.
+Review prior finished chapters' summaries and endings when needed to preserve established screen continuity.
+Write the current chapter's notes before moving to production:
+
+1. What happens, in order, and which events cause the next ones.
+2. Characters, motives, relationships and appearance/state changes.
+3. Locations, time, important props and continuity from earlier chapter films.
+4. Essential dialogue, useful narration and internal thoughts that need a visual treatment.
+5. Unknowns resolved through extra reading, with the source chapter/passage recorded.
+
+Then write the **adapted chapter script** into its `00_project.md` and `01_bible.md` before drawing up shots:
+
+- Preserve the chapter's core conflict, decisive actions, character choices and consequential information.
+- Compress repetitive descriptions, redundant dialogue, unimportant travel and side incidents that add no
+  necessary information. Log important omissions so a later chapter does not assume the audience saw them.
+- Convert useful prose into visible actions, expressions, props and environment. Use concise narration for
+  essential context or inner thought that cannot be shown naturally.
+- Write exact dialogue and narration with fixed speaker/voice IDs, emotional intent and language.
+- Give this independent chapter film an engaging opening and an intelligible development and closing beat.
+  A brief orientation may help returning viewers; do not force a recap, artificial cliffhanger or invented
+  resolution that contradicts the chapter. Keep any genuine unresolved ending intact.
+- Estimate runtime from what can actually be spoken and shown. Compress the adaptation, not the actors'
+  speaking speed, when the first draft is overloaded.
+
+Extend shared character/location records as the current chapter reveals facts. Do not invent a full future
+biography just to fill a schema. Once the adapted script is written, create the storyboard and produce any
+missing reference images needed by it.
+
+## 6. Produce this chapter with the directing workflow
+
+Use [directing-workflow.md](directing-workflow.md) as the authoritative production procedure and embedded H3
+prompt reference. Shared novel references replace duplicate local reference generation, but each chapter
+must select and verify its required versions explicitly.
+
+For the current chapter:
+
+1. Complete the adapted story, character/voice/dialogue/narration/location settings and reference selections.
+2. Design the complete storyboard: 5–15 s segments, realistic speech/action budgets, cinematic detail,
+   opening/closing states and natural transitions. Use names such as `C003_S007` in records and filenames.
+3. Generate and freeze missing character variants and location references with current Studio picture models.
+   One-off supporting characters and extras remain descriptions in the video prompt.
+4. Build H3 six-section reference-mode prompts from the bible and storyboard. Use fixed voice descriptions
+   for H3 dialogue/narration and exact ordered reference mappings. Submit independent ready jobs together to
+   the Studio queue; wait for actual dependencies before submitting jobs that require their results.
+5. QC the segments and neighboring joins, resume existing takes where possible and replace material failures.
+6. Assemble the **entire chapter** into one film. Check frame count, resolution, rhythm and audio/video sync.
+7. Submit that final edit to the **Qwen3-ASR transcription API** with aligned timestamps. Review recognized
+   words against context, script and actual speech evidence; use the glossary to fix recognition errors,
+   not to insert dialogue that was never spoken.
+8. Translate the reviewed transcript yourself into the requested language. Embed source and translation as
+   two selectable soft subtitle tracks, with no burned-in captions. Verify sync, language tags and switching.
+9. Finish the cover, publishing notes and SRT files, record QC/delivery paths, then mark the chapter done.
+
+No mandatory two-minute approval gates, casting-video requirement, Whisper environment or full-season plan
+applies. Honor review checkpoints requested by the user. Keep the user informed during production.
+
+## 7. Record progress so continuing is unambiguous
+
+Update `PROGRESS.md` after meaningful stages, submitted jobs, fixes and delivery, not only at the end of a
+chapter. Keep the ordered chapter table complete even when most chapters have not been read.
 
 ```markdown
-# Chapter 12: <title>
-
-## Events
-- <what happens, in order, in a few bullets>
-
-## Characters
-- <id>: <what they do here; any change in age, look, costume, injury, status>
-
-## Places
-- <location id>: <new or recurring>
-
-## Lines worth keeping
-- <speaker>: "<a short line that defines the scene>"
-
-## Time
-<when this happens relative to the previous chapter>
-
-## Adaptation notes
-<what is visual, what is interior monologue that needs narration, what can be cut>
-```
-
-Use stable ids for characters and places from the first chapter on (`mathilde`, `loisel`, `flat`), and record
-every alias a character goes by. Keep `analysis/synopsis.md` and `analysis/timeline.md` up to date from the
-notes as the reading advances, not from memory.
-
-### Delegating the chapter notes
-
-Reading a whole novel costs more context than one session has. The notes can be delegated to a helper agent such
-as the Codex CLI, one run at a time (never several in parallel), in groups of a few chapters queued in one
-background loop:
-
-```bash
-codex exec -m gpt-6.1-sol -c model_reasoning_effort=medium -s workspace-write -C outputs/<title> \
-  --skip-git-repo-check --ephemeral -o logs/codex_out_002.txt "$(cat logs/codex_prompt_002.md)"
-```
-
-The prompt names the chapter files, points at a finished note as the format example, fixes the ids of the main
-characters, asks for long chapters to be read in parts to the end, and limits writes to `analysis/chapters/`.
-Write the first chapter's note yourself as the example, and spot-check the helper's notes against the source
-(a few searched lines per chapter) before building the bible on them.
-
-## Step 3: the bible
-
-Build the bible from the chapter notes and extend it as the reading advances. It is the reference every later
-episode reads.
-
-`bible/cast.json` holds the strings that go into prompts; nothing else may spell a look or a voice:
-
-```json
-{
-  "mathilde": {
-    "name": "Mathilde Loisel",
-    "voice": "the soft, light, wistful soprano voice of a young woman in her twenties, ... speaking English",
-    "voice_note": "二十多岁女声，轻柔偏高，带一点气声和怅惘",
-    "variants": {
-      "day":  {"look": "Mathilde Loisel, a slender ... day dress", "keep": "Preserve the same ...",
-               "ref": "refs/mathilde_day.png", "chapters": "1-3"},
-      "ball": {"look": "...", "keep": "...", "ref": "refs/mathilde_ball.png", "chapters": "4"},
-      "old":  {"look": "...", "keep": "...", "voice": "the same woman's voice ten years later, ...",
-               "ref": "refs/mathilde_old.png", "chapters": "8-10"}
-    }
-  }
-}
-```
-
-Rules:
-
-- A **variant** is a look that recurs: a different age, a costume worn across many scenes, a lasting injury.
-  Each variant gets its own casting clip and reference. A costume worn in one or two shots is written into those
-  shots instead, with the closest variant as reference (a reference carries its costume into the shot unless the
-  prompt names the new one).
-- A variant may override the voice (age, illness); otherwise the character's voice applies everywhere.
-- Decide each variant from the notes before the episode that first needs it, so it is cast once and never redone.
-- Give the main voices clearly different gender, age or pitch. Minor characters who speak in one episode still
-  get a voice entry, so a later appearance sounds the same.
-- `locations.json` does the same for places; `style.md` fixes the style line and one score line per arc.
-- `prompts.py` loads `bible/` and builds every prompt; it never contains a look or a voice of its own.
-
-Changing the bible after an episode is made changes how a character looks or sounds in later episodes. Avoid it;
-when it is unavoidable (a voice that the user says does not work), record it in `bible/changes.md` and say which
-episodes were made with the old wording.
-
-## Step 4: the season plan
-
-Write `plan/season.md` as far as the reading has reached and extend it as it goes: which chapters each episode covers, its arc in two or three sentences, the cliffhanger it
-ends on, the cast variants it needs, and the characters it introduces. Use the episode length from Step 0 and the
-speech budget of directing-workflow.md (about 2.5 English words or 3–3.5 Chinese characters per second): a novel
-has far more words than an episode can speak, so plan narration for interior monologue and time jumps, and cut
-side plots rather than rush the main one.
-
-Once all chapter notes exist, the helper agent can draft the whole plan from them (`plan/season_draft.md`: episode
-map with chapter splits such as `7a`/`7b`, per-episode arc, keep-list, variants and new locations, a season-wide
-variants-to-cast list, setups and payoffs). Review it and rename it to `season.md`; re-check each episode's entry
-against its chapter notes before storyboarding that episode.
-
-## Step 5: casting
-
-Cast every variant needed by the first two or three episodes now, and later variants before the episode that
-first needs them (directing-workflow.md, Step 3). Cast all variants with the same style line and framing so
-they match. Once a reference has been used in a finished episode it is never regenerated; a bad reference is
-replaced only before its first use.
-
-The user listens to the casting clips to approve the voices. Record the approval in `PROGRESS.md`.
-
-## Step 6: produce one episode at a time
-
-For episode N:
-
-1. Read `PROGRESS.md`, `plan/season.md` for episode N, the chapter notes it covers, `bible/` and the previous
-   episode's storyboard (for continuity: where everyone was, what they wore, the last line).
-2. Re-read the source chapters themselves for the scenes being written, for dialogue and detail.
-3. Produce the episode in `episodes/EN/` with directing-workflow.md: storyboard in ~2-minute batches, one take per
-   shot, QC, assembly, cover, `publish.md`, soft subtitles. Shot names carry the episode (`E03_S07`).
-4. Update `PROGRESS.md` after every batch, not only at the end of the episode.
-
-Consistency rules across episodes:
-
-- Every cast member appears through their `cast.json` variant and its reference; no ad-hoc descriptions of a
-  recurring character.
-- Recurring places use their `locations.json` phrase; the style line and the arc's score line never change.
-- Open each episode on an establishing or recap shot and end it on its planned cliffhanger.
-- Add the glossary's names to the whisper `initial_prompt` for the subtitles.
-
-## PROGRESS.md: the resume file
-
-A new session reads this file first and does what its "Next action" says. Keep it short and current:
-
-```markdown
-# <title>: progress
+# <novel-title>: progress
 
 ## Settings
-16:9 · 544p · English speech · episodes ~4 min · faithful, side plots cut · stylized 3D, painterly
+16:9 · 768p · reference to video · Mandarin speech · cinematic realism
+Chinese source subtitles + English translation · Chinese track default
 
-## Phase
-Production: E02 (chapters noted to 4, bible and season plan to E03)
+## Chapter index
+source/chapters.json · 24 verified chapters
 
-## Episodes
-| Ep | Chapters | Status | Length | Notes |
-|---|---|---|---|---|
-| E01 | 1–3 | done | 4:12 | |
-| E02 | 4–5 | shooting batch 2/2 | | S05 redo queued |
-| E03 | 6–8 | planned | | needs mathilde_old casting |
+## Chapters
+| Chapter | Title | Status | Production folder | Final film | Next work |
+| --- | --- | --- | --- | --- | --- |
+| C001 | Arrival | done | chapters/C001/ | chapters/C001/Arrival.mp4 | — |
+| C002 | The visitor | subtitling | chapters/C002/ | — | Review ASR, translate and mux |
+| C003 | The letter | not_started | chapters/C003/ | — | Read and adapt |
 
 ## Next action
-Wait for E02 batch 2 (jobs in episodes/E02/scripts/jobs.json), QC, assemble E02.
+Resume C002 subtitle review using chapters/C002/jobs.json; do not resubmit its video jobs.
+C002 is the earliest unfinished chapter. Start C003 after C002 delivery if further work is authorized.
 
-## Open issues
-- The user found loisel's voice too nasal in E01; not changed yet (would need bible/changes.md entry).
+## Shared references
+refs/manifest.json · bible/cast.json · bible/locations.json
+Lin adult_travel: C001–C002. New uniform needed when introduced; not generated yet.
+
+## Continuity and open issues
+C001 omitted a repeated carriage journey; arrival and possession of the letter were retained.
+C002 consulted the first page of C003 to resolve the visitor's alias; do not reveal it early.
 
 ## Resume order
-PROGRESS.md → bible/ → plan/season.md → the current episode's folder → its chapter notes and source chapters.
+Progress → chapter index/status → shared bible and manifest → active chapter records/source → existing jobs.
 ```
 
-Episode status values: planned, storyboarded, shooting batch k/n, assembled, subtitled, done.
+Useful statuses: `not_started`, `adapting`, `storyboarded`, `references_ready`, `generating`, `qc`,
+`assembled`, `subtitling`, `done`. Add a precise next action and error details when a stage fails; a status
+alone is insufficient. An assembled chapter waiting for subtitles is unfinished and takes priority over the
+next untouched chapter when continuing.
 
-## Step 7: the series
-
-When the season is done, assemble nothing new: each episode is its own film. Make a series poster
-(`series/poster.png`, MOSS-Image, as in directing-workflow.md) and `series/publish.md` with the series title,
-description, hashtags and the episode list. A theme song (MiniMax Music 3, `kind=music`) can open every episode
-as guide audio on its first shot; make it once and reuse the same file.
-
-## Known limits
-
-- Voices are fixed by text, not cloned: the same voice phrase gives a similar voice, not an identical one. Keep
-  the phrase byte-for-byte identical and let the user judge the casting clips.
-- Reading costs time and context; write each chapter note before reading on, and never re-read the whole book
-  in one session.
-- Faces drift slightly between episodes as between shots; always pass the variant's reference, even for a
-  character seen from behind.
+Keep changes to shared voices, identity and locations in `bible/changes.md`, including which completed
+chapters used earlier versions. Once the authorized chapters are delivered, update the novel-wide video
+index. A series poster or summary is optional; it must not delay delivery of an already completed chapter.
