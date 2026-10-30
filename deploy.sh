@@ -37,6 +37,8 @@ health() { remote "curl -fsS --max-time 5 http://127.0.0.1:$PORT/api/health" 2>/
 # Remote defaults depend on the SSH user's home directory.
 REMOTE_HOME=$(remote 'printf %s "$HOME"')
 REMOTE=${H3_DEPLOY_DIR:-$REMOTE_HOME/minimax-h3-studio}
+# Jobs database and generated files; may live on another disk than the code.
+DATA=${H3_DATA_DIR:-$REMOTE/data}
 
 deploy_web() {
   echo "==> building web"
@@ -61,11 +63,19 @@ render_unit() {
   unit=$(<server/h3-server.service.in)
   unit=${unit//@USER@/$user}
   unit=${unit//@DIR@/$REMOTE}
+  unit=${unit//@DATA@/$DATA}
   unit=${unit//@COMFYUI@/$H3_COMFYUI}
   unit=${unit//@AUDIOCPP_DIR@/${H3_AUDIOCPP_DIR:-}}
   unit=${unit//@AUDIOCPP_PORT@/${H3_AUDIOCPP_PORT:-8191}}
   unit=${unit//@AUDIOCPP_THREADS@/${H3_AUDIOCPP_THREADS:-8}}
+  unit=${unit//@AUDIOCPP_INSTANCES@/${H3_AUDIOCPP_INSTANCES:-1}}
   unit=${unit//@AUDIOCPP_TIMEOUT@/${H3_AUDIOCPP_TIMEOUT:-1800}}
+  unit=${unit//@STRATA_DIR@/${H3_STRATA_DIR:-}}
+  unit=${unit//@STRATA_CONFIG@/${H3_STRATA_CONFIG:-}}
+  unit=${unit//@STRATA_PORT@/${H3_STRATA_PORT:-8192}}
+  unit=${unit//@STRATA_PARALLEL@/${H3_STRATA_PARALLEL:-8}}
+  unit=${unit//@STRATA_CONCURRENCY@/${H3_STRATA_CONCURRENCY:-16}}
+  unit=${unit//@STRATA_TIMEOUT@/${H3_STRATA_TIMEOUT:-1800}}
   unit=${unit//@HOST@/${H3_HOST:-0.0.0.0}}
   unit=${unit//@PORT@/$PORT}
   unit=${unit//@COMFY_ARGS@/$comfy_args}
@@ -84,10 +94,10 @@ deploy_server() {
     exit 1
   fi
   echo "==> syncing server code to $HOST:$REMOTE"
-  remote "mkdir -p '$REMOTE/server' '$REMOTE/comfy_launcher' '$REMOTE/data'"
-  rsync -az --delete --exclude __pycache__ server/ "$HOST:$REMOTE/server/"
+  remote "mkdir -p '$REMOTE/server' '$REMOTE/comfy_launcher' '$DATA'"
+  rsync -az --delete --exclude __pycache__ --exclude .DS_Store server/ "$HOST:$REMOTE/server/"
   rsync -az comfy_launcher/run_h3.py "$HOST:$REMOTE/comfy_launcher/"
-  rsync -az --delete scripts/ "$HOST:$REMOTE/scripts/"
+  rsync -az --delete --exclude .DS_Store scripts/ "$HOST:$REMOTE/scripts/"
   echo "==> installing systemd unit $SERVICE and restarting"
   render_unit | remote "sudo tee /etc/systemd/system/$SERVICE.service > /dev/null \
     && sudo systemctl daemon-reload && sudo systemctl enable --quiet $SERVICE && sudo systemctl restart $SERVICE"

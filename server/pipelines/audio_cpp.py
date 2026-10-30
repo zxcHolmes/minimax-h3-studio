@@ -9,11 +9,13 @@ from audio_media import to_wav, wav_info
 from transcript_exports import export_transcript
 
 
-def speech(engine, *, model, text, options, source_path, seed, audio_path, on_progress):
+def speech(engine, *, model, text, options, source_path, seed, audio_path, on_progress, check=None, owner=None):
+    """check/owner: per-job cancellation when several speech jobs share the instance pool."""
     start = time.perf_counter()
     runtime = engine.audio_cpp
     if runtime is None:
         raise RuntimeError("audio.cpp is not configured")
+    check = check or engine._check
     mode = options["speech_mode"]
     native = native_id(model, mode)
     request = {
@@ -45,16 +47,16 @@ def speech(engine, *, model, text, options, source_path, seed, audio_path, on_pr
         if source_path:
             on_progress("preprocessing", 0.0)
             reference = Path(temp) / "reference.wav"
-            to_wav(source_path, reference, sample_rate=24000, check=engine._check)
+            to_wav(source_path, reference, sample_rate=24000, check=check)
             request["voice_ref"] = str(reference)
             if options.get("reference_text"):
                 request["reference_text"] = options["reference_text"]
         on_progress("synthesizing", 0.0)
         data = runtime.infer(
-            native, "/v1/audio/speech", request, engine._check, binary=True
+            native, "/v1/audio/speech", request, check, binary=True, owner=owner
         )
         seconds, rate = wav_info(data)
-        engine._check()
+        check()
         on_progress("saving", 0.0)
         part = Path(temp) / "speech.wav"
         part.write_bytes(data)

@@ -106,3 +106,47 @@ class WorkerTests(APIAppTestCase):
         job = self.store.create(mode="t2m", prompt="cancel", seed=42)
         worker._run_one(job["id"])
         self.assertEqual(self.store.get(job["id"])["status"], "canceled")
+
+
+class PooledSpeechTests(APIAppTestCase):
+    async def test_consecutive_speech_jobs_run_one_per_instance(self):
+        import threading
+        import time
+
+        options = {"speech_mode": "generate", "voice": "Ryan"}
+        jobs = [self.store.create(mode="tts", prompt=f"line {i}", seed=i, audio_model="qwen3_tts",
+                                  audio_options=options) for i in range(7)]
+        other = self.store.create(mode="t2i", prompt="picture", seed=1, width=512, height=512)
+        state = {"now": 0, "peak": 0, "prepared": 0}
+        lock = threading.Lock()
+
+        def generate_speech(*, audio_path, prepared, check, owner, **kw):
+            with lock:
+                state["now"] += 1
+                state["peak"] = max(state["peak"], state["now"])
+            time.sleep(0.05)
+            with lock:
+                state["now"] -= 1
+            return {"seconds": 1.0}
+
+        engine = SimpleNamespace(
+            audio_cpp=SimpleNamespace(size=3, request_stop=Mock()),
+            speech_task=lambda model, opts: ("audio_cpp", model),
+            _prepare_task=lambda task: state.__setitem__("prepared", state["prepared"] + 1),
+            _cancel=False,
+            generate_speech=generate_speech,
+            generate_image=Mock(return_value={}),
+            memory=SimpleNamespace(observe=Mock()),
+        )
+        worker = Worker(self.store, engine, self.settings)
+        for job in jobs[1:]:
+            worker.queue.put(job["id"])
+        worker.queue.put(other["id"])
+        worker._run_one(jobs[0]["id"])
+        self.assertEqual([self.store.get(j["id"])["status"] for j in jobs], ["done"] * 7)
+        self.assertEqual(state["peak"], 3)
+        self.assertEqual(state["prepared"], 1)
+        self.assertEqual(self.store.get(other["id"])["status"], "queued")  # left for the main loop
+        self.assertEqual(worker.queue.get(), other["id"])
+        self.assertIsNone(worker.running_id)
+        self.assertEqual(worker.speech_jobs, {})

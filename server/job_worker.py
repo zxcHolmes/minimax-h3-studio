@@ -23,6 +23,7 @@ class Worker(threading.Thread):
         self.engine = engine
         self.queue = queue.Queue()
         self.running_id = None
+        self.speech_jobs = {}  # running pooled speech job id -> cancel requested
         self.state = "loading"
         self.load_error = None
         self.loaded_at = None
@@ -63,9 +64,105 @@ class Worker(threading.Thread):
         self.queue.put(task)
         return future
 
+    def cancel(self, job_id):
+        """Cancel one running job; pooled speech jobs stop only their own audio.cpp instance."""
+        if job_id in self.speech_jobs:
+            self.speech_jobs[job_id] = True
+            self.engine.audio_cpp.request_stop(owner=job_id)
+        elif self.running_id == job_id:
+            self.engine.cancel()
+
+    def _next_speech(self):
+        """Pop the queue head if it is a speech job (any speech model); keeps queue order."""
+        with self.queue.mutex:
+            while self.queue.queue:
+                head = self.queue.queue[0]
+                if callable(head):
+                    return None
+                job = self.store.get(head)
+                if not job or job["status"] != "queued":
+                    self.queue.queue.popleft()  # _run_one would skip it as well
+                    continue
+                if job["mode"] != "tts":
+                    return None
+                self.queue.queue.popleft()
+                return job
+        return None
+
+    def _run_speech_batch(self, first):
+        """Run consecutive queued speech jobs on the audio.cpp pool, one per instance, rolling."""
+        task = self.engine.speech_task(first["audio_model"], first["audio_options"] or {})
+        try:
+            self.engine._prepare_task(task)
+        except Exception:
+            return False  # the single-job path reports the failure with memory recovery
+        size = self.engine.audio_cpp.size
+        self.running_id = first["id"]
+        running, job = {}, first
+        with concurrent.futures.ThreadPoolExecutor(size, thread_name_prefix="h3-speech") as pool:
+            while True:
+                while len(running) < size:
+                    job = job or self._next_speech()
+                    if not job:
+                        break
+                    self.speech_jobs[job["id"]] = False
+                    running[pool.submit(self._run_speech, job)] = job["id"]
+                    job = None
+                if not running:
+                    break
+                done, _ = concurrent.futures.wait(list(running), timeout=0.5,
+                                                  return_when=concurrent.futures.FIRST_COMPLETED)
+                for future in done:
+                    running.pop(future)
+        self.running_id = None
+        try:
+            self.engine.memory.observe()
+        except Exception:
+            log.exception("failed to record GPU memory status")
+        return True
+
+    def _run_speech(self, job):
+        job_id = job["id"]
+
+        def check():
+            if self.speech_jobs.get(job_id) or self.engine._cancel:
+                raise Canceled()
+
+        last = {"t": 0.0}
+
+        def on_progress(stage, fraction):
+            now = time.monotonic()
+            if fraction in (0.0, 1.0) or now - last["t"] > 0.5:
+                last["t"] = now
+                self.store.update(job_id, stage=stage, progress=round(fraction, 3))
+
+        self.store.update(job_id, status="running", started_at=time.time(), stage="encoding", progress=0.0)
+        try:
+            source = self.settings.uploads / job["input_media"] if job["input_media"] else None
+            output = f"{job_id}.wav"
+            result = self.engine.generate_speech(model=job["audio_model"], text=job["prompt"],
+                options=job["audio_options"] or {}, source_path=source, seed=job["seed"],
+                audio_path=self.settings.speech / output, on_progress=on_progress,
+                prepared=True, check=check, owner=job_id)
+            self.store.update(job_id, status="done", stage="done", progress=1.0, audio=output,
+                duration=result["seconds"], result=result, finished_at=time.time())
+            log.info("job %s done tts", job_id)
+        except Canceled:
+            self.store.update(job_id, status="canceled", finished_at=time.time())
+            log.info("job %s canceled", job_id)
+        except Exception:
+            err = traceback.format_exc()
+            self.store.update(job_id, status="failed", error=err[-4000:], finished_at=time.time())
+            log.error("job %s failed:\n%s", job_id, err)
+        finally:
+            self.speech_jobs.pop(job_id, None)
+
     def _run_one(self, job_id):
         job = self.store.get(job_id)
         if not job or job["status"] != "queued":
+            return
+        pool = getattr(self.engine, "audio_cpp", None)
+        if job["mode"] == "tts" and pool is not None and pool.size > 1 and self._run_speech_batch(job):
             return
         self.running_id = job_id
         self.store.update(
@@ -99,6 +196,14 @@ class Worker(threading.Thread):
                 self.store.update(job_id, status="done", stage="done", progress=1.0, audio=output,
                     duration=result["seconds"], result=result, finished_at=time.time())
                 log.info("job %s done %s", job_id, job["mode"])
+                return
+            if job["mode"] == "llm":
+                output = f"{job_id}.jsonl"
+                result = self.engine.run_llm(requests_path=self.settings.uploads / job["input_media"],
+                    output_path=self.settings.llm / output, concurrency=(job["llm_options"] or {}).get("concurrency", 16),
+                    on_progress=on_progress)
+                self.store.update(job_id, status="done", stage="done", progress=1.0, result=result, finished_at=time.time())
+                log.info("job %s done llm %s", job_id, {k: result[k] for k in ("requests", "failed", "tokens_per_second")})
                 return
             if job["mode"] == "i23d":
                 model = f"{job_id}.glb"

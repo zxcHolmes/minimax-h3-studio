@@ -324,14 +324,14 @@ class TranscriptTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
-    def test_native_variants_are_distinct_and_single_residency_is_configured(self):
+    def test_native_variants_are_distinct_and_two_model_residency_is_configured(self):
         config = server_config(Path("/audio"), 8191, 8)
         self.assertEqual(set(ASR_MODELS), {"qwen3_asr"})
         self.assertEqual(
             {m["family"] for m in config["models"] if m["task"] == "asr"}, {"qwen3_asr"}
         )
         self.assertEqual(config["backend"], "cuda")
-        self.assertEqual(config["max_loaded_models"], 1)
+        self.assertEqual(config["max_loaded_models"], 2)
         self.assertEqual(config["idle_unload_ms"], 0)
         self.assertNotEqual(
             native_id("qwen3_tts", "clone"), native_id("qwen3_tts", "design")

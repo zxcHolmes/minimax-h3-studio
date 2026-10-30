@@ -42,6 +42,7 @@ def make_app(settings=None, engine=None, *, start_worker=True):
         ("uploads", settings.uploads),
         ("speech", settings.speech),
         ("transcripts", settings.transcripts),
+        ("llm", settings.llm),
     ):
         app.router.add_static(f"/files/{name}", folder)
     app.router.add_get("/{path:.*}", frontend.frontend)

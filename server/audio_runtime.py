@@ -239,3 +239,77 @@ class AudioCppServer:
         self.process = None
         self.resident_model = None
         self.configured_ids = set()
+
+
+class AudioCppPool:
+    """N independent audio.cpp servers (ports port, port + 10, ...), one request each.
+
+    Exposes the AudioCppServer interface so memory policy and the engine treat it
+    as one runtime. Instances start lazily, lowest index first, so a single request
+    at a time only ever uses the first one.
+    """
+
+    def __init__(self, root, state_dir, *, port=8191, threads=8, timeout=1800, instances=1):
+        self.root = Path(root)
+        self.servers = [
+            AudioCppServer(root, Path(state_dir) / (f"instance-{i}" if i else ""),
+                port=port + 10 * i, threads=threads, timeout=timeout)  # port + 1 is Strata's default
+            for i in range(max(1, instances))
+        ]
+        self._free = list(self.servers)
+        self._owners = {}
+        self._lock = threading.Condition()
+
+    @property
+    def size(self):
+        return len(self.servers)
+
+    @property
+    def running(self):
+        return any(s.running for s in self.servers)
+
+    @property
+    def resident_model(self):
+        return next((s.resident_model for s in self.servers if s.resident_model is not None), None)
+
+    @property
+    def configured_ids(self):
+        return next((s.configured_ids for s in self.servers if s.configured_ids), set())
+
+    @property
+    def status(self):
+        return {**self.servers[0].status, "running": self.running, "model": self.resident_model,
+                "instances": self.size, "busy": self.size - len(self._free)}
+
+    def infer(self, model, path, payload, check, *, binary=False, owner=None):
+        with self._lock:
+            while not self._free:
+                self._lock.wait(1)
+                check()
+            server = self._free.pop(0)
+            if owner is not None:
+                self._owners[owner] = server
+        try:
+            return server.infer(model, path, payload, check, binary=binary)
+        finally:
+            with self._lock:
+                self._owners.pop(owner, None)
+                self._free.append(server)
+                self._free.sort(key=self.servers.index)
+                self._lock.notify()
+
+    def unload(self):
+        for s in self.servers:
+            s.unload()
+
+    def request_stop(self, owner=None):
+        """Stop the instance serving owner, or every instance."""
+        if owner is None:
+            for s in self.servers:
+                s.request_stop()
+        elif owner in self._owners:
+            self._owners[owner].request_stop()
+
+    def stop(self):
+        for s in self.servers:
+            s.stop()

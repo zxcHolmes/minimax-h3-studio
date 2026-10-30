@@ -16,6 +16,7 @@ HISTORY_KINDS = {
     "3d": ("i23d",),
     "speech": ("tts",),
     "asr": ("asr",),
+    "llm": ("llm",),
 }
 
 
@@ -30,6 +31,13 @@ class ServerSettings:
     audio_cpp_port: int = 8191
     audio_cpp_threads: int = 8
     audio_cpp_timeout: int = 1800
+    audio_cpp_instances: int = 1
+    strata_dir: Path | None = None
+    strata_config: Path | None = None
+    strata_port: int = 8192
+    strata_parallel: int = 8
+    strata_concurrency: int = 16
+    strata_timeout: int = 1800
     comfy_args: tuple = ("--enable-triton-backend", "--use-sage-attention")
 
     @classmethod
@@ -46,6 +54,13 @@ class ServerSettings:
             audio_cpp_port=int(os.environ.get('H3_AUDIOCPP_PORT', '8191')),
             audio_cpp_threads=int(os.environ.get('H3_AUDIOCPP_THREADS', '8')),
             audio_cpp_timeout=int(os.environ.get('H3_AUDIOCPP_TIMEOUT', '1800')),
+            audio_cpp_instances=int(os.environ.get('H3_AUDIOCPP_INSTANCES', '1')),
+            strata_dir=Path(os.environ["H3_STRATA_DIR"]).expanduser() if os.environ.get("H3_STRATA_DIR") else None,
+            strata_config=Path(os.environ["H3_STRATA_CONFIG"]).expanduser() if os.environ.get("H3_STRATA_CONFIG") else None,
+            strata_port=int(os.environ.get("H3_STRATA_PORT", "8192")),
+            strata_parallel=int(os.environ.get("H3_STRATA_PARALLEL", "8")),
+            strata_concurrency=int(os.environ.get("H3_STRATA_CONCURRENCY", "16")),
+            strata_timeout=int(os.environ.get("H3_STRATA_TIMEOUT", "1800")),
             comfy_args=tuple(
                 shlex.split(
                     os.environ.get(
@@ -80,6 +95,10 @@ class ServerSettings:
         return self.data / "transcripts"
 
     @property
+    def llm(self):
+        return self.data / "llm"
+
+    @property
     def thumbs(self):
         return self.data / "thumbs"
 
@@ -102,5 +121,6 @@ class ServerSettings:
             self.models3d,
             self.speech,
             self.transcripts,
+            self.llm,
         ):
             path.mkdir(parents=True, exist_ok=True)

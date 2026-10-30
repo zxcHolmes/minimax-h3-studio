@@ -128,7 +128,8 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 | `H3_CONDA_ENV` | | `comfyui` | Conda env that runs ComfyUI |
 | `H3_CONDA_SH` | | `~/miniconda3/etc/profile.d/conda.sh` | conda init script to source |
 | `H3_PYTHON` | | | Absolute path of a Python interpreter (venv); overrides the conda settings |
-| `H3_DEPLOY_DIR` | | `~/minimax-h3-studio` | Install directory on the GPU machine (code, UI and `data/`) |
+| `H3_DEPLOY_DIR` | | `~/minimax-h3-studio` | Install directory on the GPU machine (code and UI) |
+| `H3_DATA_DIR` | | `$H3_DEPLOY_DIR/data` | Data directory on the GPU machine (`jobs.db` and all generated files); put it on a large disk |
 | `H3_SERVICE_USER` | | SSH user | User the service runs as |
 | `H3_SERVICE` | | `h3-server` | systemd unit name |
 | `H3_HOST` / `H3_PORT` | | `0.0.0.0` / `8190` | Address the server listens on |
@@ -138,7 +139,14 @@ Everything machine-specific lives in `.env` (git-ignored; never commit it). `.en
 | `H3_AUDIOCPP_DIR` | | sibling `audio_cpp/` next to `H3_COMFYUI` | Native runtime, package cache and selected GGUF models |
 | `H3_AUDIOCPP_PORT` | | `8191` | Worker-owned audio.cpp server, bound only to loopback |
 | `H3_AUDIOCPP_THREADS` | | `8` | Native CPU worker threads |
+| `H3_AUDIOCPP_INSTANCES` | | `1` | audio.cpp servers for speech jobs; consecutive queued speech jobs run one per instance (ports `PORT`, `PORT+10`, …). Measured on the 4090: 2 instances ≈ 1.9× clips/min |
 | `H3_AUDIOCPP_TIMEOUT` | | `1800` | Maximum seconds for one native speech/ASR request |
+| `H3_STRATA_DIR` | | | Strata checkout (`.venv/`, `serve/server.py`) for `kind=llm` batches; empty disables LLM jobs |
+| `H3_STRATA_CONFIG` | | | Strata engine config JSON (model, context, MTP) |
+| `H3_STRATA_PORT` | | `8192` | Worker-owned Strata server, bound only to loopback |
+| `H3_STRATA_PARALLEL` | | `8` | Strata decode slots (`--parallel`) |
+| `H3_STRATA_CONCURRENCY` | | `16` | Default requests in flight per LLM batch |
+| `H3_STRATA_TIMEOUT` | | `1800` | Maximum seconds for one chat request |
 | `H3_API` | | `http://<deploy host>:<port>` | Where `npm run dev` proxies API calls |
 
 ## Models
@@ -290,6 +298,13 @@ For ASR, use `kind=asr`, `audio_model` (`qwen3_asr`), `media`, optional `languag
 
 ![Native voice cloning](doc/screenshots/speech.webp)
 
+### LLM batches (Strata)
+
+Text generation runs through a worker-owned Strata server (`H3_STRATA_DIR` + `H3_STRATA_CONFIG`; measured with Qwen3.6-35B-A3B UD-Q4_K_XL, 8 slots, 16K context, MTP 2 on the 4090: ~97 tok/s for one request, ~340 tok/s aggregate with 16 requests in flight). One job is one batch, so LLM work queues FIFO with the image, video and speech jobs: Strata starts on the first `llm` job (~1 min from a cold page cache), stays up for the following `llm` jobs, and is stopped before any other job, because it holds nearly all VRAM. Entering it offloads the ComfyUI models and stops audio.cpp.
+
+API: `POST /api/jobs` with `kind=llm`, a `requests` JSONL file (1–5000 lines of `{"id": "...", "body": {OpenAI chat completion body}}`), optional `prompt` (label) and `concurrency` (1–64, default `H3_STRATA_CONCURRENCY`). Each request is retried up to 3 times on transport errors, `finish_reason: length` or (with `response_format` json_schema / json_object) unparsable JSON. The job finishes `done` even when some requests failed; `result` holds `requests`, `succeeded`, `failed`, `completion_tokens`, `tokens_per_second`, and `output_url` (`/files/llm/<job>.jsonl`) has one line per request: `{"id", "ok", "content", "usage", "attempts", "seconds"}` or `{"id", "ok": false, "error"}`. Turn thinking off per request with `"chat_template_kwargs": {"enable_thinking": false}`. History: `GET /api/jobs?kind=llm` (API only; the web UI has no LLM page).
+
+
 ![Qwen3-ASR aligned words and subtitle exports](doc/screenshots/asr.webp)
 
 ### GPU memory and model residency
@@ -371,7 +386,7 @@ FORCE=1 ./deploy.sh server   # restart even while jobs are running or queued (th
 On the GPU machine:
 
 - Logs: `journalctl -u h3-server -f`
-- Data: `$H3_DEPLOY_DIR/data/` (`jobs.db`, `videos/`, `pictures/`, `music/`, `thumbs/`, `uploads/`)
+- Data: `$H3_DATA_DIR` (default `$H3_DEPLOY_DIR/data/`: `jobs.db`, `videos/`, `pictures/`, `music/`, `thumbs/`, `uploads/`)
 - Stop / start: `sudo systemctl stop h3-server` / `sudo systemctl start h3-server`
 
 Running without the deploy script: build the UI (`cd web && npm install && npm run build`), copy the repo to the GPU machine and, inside the ComfyUI Python environment, run `H3_COMFYUI=/path/to/ComfyUI H3_WEB_DIST=web/dist python server/app.py`.
@@ -421,11 +436,13 @@ python comfy_launcher/run_h3.py --comfyui /path/to/ComfyUI \
 
 It also takes `--first-frame`, `--last-frame`, repeated `--ref-image`, `--jobs-json` for batches and `--lora-loader larryvrh`. For experiments: `--attention-backend` (`pytorch` or comfy_kitchen `kitchen` attention), `--vsa` / `--vsa-start` (Video Sparse Attention for FastH3 checkpoints) and `--save-frames` (also writes the decoded frames losslessly as `.npy`). See `--help`. `comfy_launcher/bench.sh` wraps it with GPU memory logging.
 
-## Making an animated series
+## Production guides
 
-[doc/directing-workflow.md](doc/directing-workflow.md) describes how an agent such as Claude Code directs a multi-shot production of any genre (animated series, drama, documentary, talking head, commercial, MV) through the HTTP API: a cast and voice bible with fixed looks and voices, casting clips that provide reference images, storyboards planned in ~2-minute batches that the user approves one at a time, reference-mode shots that keep characters consistent, QC, and assembling the result with ffmpeg.
+[doc/narrated-image-workflow.md](doc/narrated-image-workflow.md) covers illustrated channels and series: a topic becomes episode outlines, complete scripts, dense still-image sequences, narration and Ken Burns editing. Artwork uses Studio's own Qwen Image API and speech uses Studio's own TTS API. Lock the visual style across the series and edit from selected character references whenever a defined character appears. This route supports history, children's picture books, science and other topics, independently of H3 audiovisual generation.
 
-[doc/novel-adaptation-workflow.md](doc/novel-adaptation-workflow.md) extends it to a series adapted from a novel (epub or txt): splitting the book into chapters, a read-through saved as chapter notes, a character and voice bible kept as the single source across episodes, a season plan, and a progress file so the work can be resumed episode by episode in later sessions.
+[doc/directing-workflow.md](doc/directing-workflow.md) describes directing generated audiovisual shots through the Studio API: complete scripts, fixed character/location references and voices, reference-mode video generation, continuity checks, assembly and reviewed subtitles.
+
+[doc/novel-adaptation-workflow.md](doc/novel-adaptation-workflow.md) extends that route to novels: one source chapter per independent film, resuming the earliest unfinished chapter, adapting its essential plot before storyboarding, and sharing versioned character/location references and progress records across chapters.
 
 ## Development
 

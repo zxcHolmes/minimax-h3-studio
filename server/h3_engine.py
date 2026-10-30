@@ -13,9 +13,10 @@ sys.path.insert(0, str(ROOT / "comfy_launcher"))
 from run_h3 import bootstrap_comfy, load_larryvrh_nodes
 from engine_errors import Canceled
 from runtime_memory import MemoryPolicy
-from audio_runtime import AudioCppServer
+from audio_runtime import AudioCppPool
 from audio_catalog import native_id as audio_native_id
-from pipelines import audio_cpp
+from pipelines import audio_cpp, llm
+from llm_runtime import StrataServer
 from model_catalog import AUDIO_VAE, CLIP, DEFAULT_LORAS, LORAS, VIDEO_VAE, unet_file
 from pipelines import video, picture, music, seedvr2, flashvsr, pixal, media
 
@@ -36,9 +37,13 @@ class H3Engine:
         self._flashvsr = None
         self._pixal = None
         self._cancel = False
-        self.audio_cpp = AudioCppServer(audio_settings.audio_root, audio_settings.data / "audio_cpp",
+        self.audio_cpp = AudioCppPool(audio_settings.audio_root, audio_settings.data / "audio_cpp",
             port=audio_settings.audio_cpp_port, threads=audio_settings.audio_cpp_threads,
-            timeout=audio_settings.audio_cpp_timeout) if audio_settings is not None else None
+            timeout=audio_settings.audio_cpp_timeout,
+            instances=audio_settings.audio_cpp_instances) if audio_settings is not None else None
+        self.llm = StrataServer(audio_settings.strata_dir, audio_settings.strata_config, audio_settings.data / "strata",
+            port=audio_settings.strata_port, parallel=audio_settings.strata_parallel,
+            timeout=audio_settings.strata_timeout) if audio_settings is not None and audio_settings.strata_dir and audio_settings.strata_config else None
 
     def bootstrap(self):
         """ComfyUI's process-level setup (CLI args, DynamicVRAM). Call from the main thread."""
@@ -133,6 +138,8 @@ class H3Engine:
 
         if self.audio_cpp is not None:
             self.audio_cpp.stop()
+        if self.llm is not None:
+            self.llm.stop()
         self.memory.reset()
         if self._flashvsr is not None:
             self._flashvsr.release()
@@ -200,6 +207,8 @@ class H3Engine:
         self._cancel = True
         if self.audio_cpp is not None and self.memory.task and self.memory.task[0] == "audio_cpp":
             self.audio_cpp.request_stop()
+        if self.llm is not None and self.memory.task and self.memory.task[0] == "llm":
+            self.llm.request_stop()
         self.mm.interrupt_current_processing(True)
 
     def _check(self):
@@ -358,10 +367,19 @@ class H3Engine:
         self._prepare_task(("pixal3d",))
         return pixal.generate_3d(self, **kwargs)
 
-    def generate_speech(self, *, model, options, **kwargs):
-        self._prepare_task(("audio_cpp", audio_native_id(model, options["speech_mode"])))
+    def speech_task(self, model, options):
+        return ("audio_cpp", audio_native_id(model, options["speech_mode"]))
+
+    def generate_speech(self, *, model, options, prepared=False, **kwargs):
+        """prepared=True: the worker already ran _prepare_task for this speech batch."""
+        if not prepared:
+            self._prepare_task(self.speech_task(model, options))
         return audio_cpp.speech(self, model=model, options=options, **kwargs)
 
     def transcribe(self, *, model, **kwargs):
         self._prepare_task(("audio_cpp", model))
         return audio_cpp.transcribe(self, model=model, **kwargs)
+
+    def run_llm(self, **kwargs):
+        self._prepare_task(("llm", self.llm.model if self.llm else None))
+        return llm.batch(self, **kwargs)

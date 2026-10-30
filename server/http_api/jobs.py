@@ -16,7 +16,7 @@ async def list_jobs(request):
     store = request.app["store"]
     kind = request.query.get("kind")
     if kind is not None and kind not in HISTORY_KINDS:
-        return bad_request("kind must be video, image, music or 3d")
+        return bad_request("kind must be one of " + ", ".join(HISTORY_KINDS))
     try:
         limit = max(1, min(int(request.query.get("limit", "60")), 500))
         offset = max(int(request.query.get("offset", "0")), 0)
@@ -92,8 +92,8 @@ async def cancel_job(request):
         raise web.HTTPNotFound()
     if job["status"] == "queued":
         store.update(job["id"], status="canceled", finished_at=time.time())
-    elif job["status"] == "running" and worker.running_id == job["id"]:
-        worker.engine.cancel()
+    elif job["status"] == "running":
+        worker.cancel(job["id"])
     return web.json_response({"ok": True})
 
 
@@ -111,6 +111,7 @@ async def delete_job(request):
         (settings.pictures, job["picture"]),
         (settings.speech if job["mode"] == "tts" else settings.music, job["audio"]),
         (settings.uploads, job["input_media"]),
+        (settings.llm, (job["result"] or {}).get("output") if job["mode"] == "llm" else None),
         *((settings.transcripts, n) for n in (job["result"] or {}).get("transcript", {}).get("exports", {}).values()),
         (settings.thumbs, job["thumb"]),
         (settings.uploads, job["image"]),

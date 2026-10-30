@@ -325,7 +325,7 @@ def server_config(root, port, threads):
         "device": 0,
         "threads": threads,
         "lazy_load": True,
-        "max_loaded_models": 1,
+        "max_loaded_models": 2,  # e.g. Qwen3-TTS CustomVoice + Base for mixed preset/clone casts
         "idle_unload_ms": 0,
         "min_free_memory_mb": 1024,
         "log_request_body": False,

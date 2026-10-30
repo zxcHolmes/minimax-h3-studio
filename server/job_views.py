@@ -35,6 +35,10 @@ def job_view(job, positions):
         view["models"] = stored or audio_model_info(job["audio_model"], (job["audio_options"] or {}).get("speech_mode", "generate"))
         exports = (job["result"] or {}).get("transcript", {}).get("exports", {})
         view["transcript_urls"] = {key: f"/files/transcripts/{name}" for key, name in exports.items()}
+    elif job["mode"] == "llm":
+        view["models"] = stored
+        output = (job["result"] or {}).get("output")
+        view["output_url"] = f"/files/llm/{output}" if output else None
     elif job["mode"] == "i23d":
         view["models"] = stored or pixal_model_info()
     elif job["mode"] in ("t2i", "i2i"):

@@ -7,7 +7,7 @@ from engine_errors import MemoryPressure
 
 log = logging.getLogger("h3.memory")
 MIB = 1024**2
-EXTERNAL_TASKS = {"flashvsr", "pixal3d", "audio_cpp"}
+EXTERNAL_TASKS = {"flashvsr", "pixal3d", "audio_cpp", "llm"}
 
 
 def is_memory_error(exc, mm=None):
@@ -49,11 +49,22 @@ class MemoryPolicy:
         if device.type != "cuda":
             self.task = task
             return
+        llm = getattr(self.engine, "llm", None)
+        if llm is not None and llm.running:
+            if task[0] == "llm":
+                # A warm Strata already owns the VRAM it sized itself for; low free memory is expected.
+                self.task = task
+                self.status = {"action": "retained", "switch": False}
+                self.observe()
+                return
+            llm.stop()  # Strata keeps nearly all VRAM while it runs; any other job needs it gone.
         audio = getattr(self.engine, "audio_cpp", None)
-        if audio is not None and audio.resident_model is not None and (task[0] != "audio_cpp" or audio.resident_model != task[1]):
+        if audio is not None and audio.resident_model is not None and task[0] != "audio_cpp":
+            # Between audio models audio.cpp keeps two resident and evicts the least recently used itself;
+            # unloading on every preset/clone switch reloaded weights for each clip.
             audio.unload()
         reserve = int(mm.minimum_inference_memory())
-        if audio is not None and audio.running and mm.get_free_memory(device) < reserve:
+        if audio is not None and audio.running and (task[0] == "llm" or mm.get_free_memory(device) < reserve):
             audio.stop()  # Release private CUDA caches/context if model unload was insufficient.
         changed = self.task != task
         action = "retained"

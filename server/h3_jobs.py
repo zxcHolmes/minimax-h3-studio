@@ -12,8 +12,9 @@ COLUMNS = (
     "created_at", "started_at", "finished_at", "last_image", "refs", "lora", "lora_strength",
     "picture", "audio", "lyrics", "guide_audio", "audio_start", "sampler", "steps", "source", "upscaler",
     "ref_videos", "model_3d", "mesh_options", "image_model", "audio_model", "audio_options", "input_media",
+    "llm_options",
 )
-JSON_COLUMNS = ("result", "refs", "ref_videos", "mesh_options", "audio_options")
+JSON_COLUMNS = ("result", "refs", "ref_videos", "mesh_options", "audio_options", "llm_options")
 
 ACTIVE = ("queued", "running")
 
@@ -40,7 +41,8 @@ class JobStore:
                                  ("audio", "TEXT"), ("lyrics", "TEXT"), ("guide_audio", "TEXT"),
                                  ("audio_start", "REAL"), ("sampler", "TEXT"), ("steps", "INTEGER"),
                                  ("source", "TEXT"), ("upscaler", "TEXT"), ("ref_videos", "TEXT"),
-                                 ("model_3d", "TEXT"), ("mesh_options", "TEXT"), ("image_model", "TEXT"), ("audio_model", "TEXT"), ("audio_options", "TEXT"), ("input_media", "TEXT")):
+                                 ("model_3d", "TEXT"), ("mesh_options", "TEXT"), ("image_model", "TEXT"), ("audio_model", "TEXT"), ("audio_options", "TEXT"), ("input_media", "TEXT"),
+                                 ("llm_options", "TEXT")):
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
             self._db.commit()

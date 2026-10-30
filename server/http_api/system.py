@@ -56,6 +56,7 @@ async def health(request):
             "queued": len(request.app["store"].queued_ids()),
             "loaded_at": worker.loaded_at,
             "audio_cpp": worker.engine.audio_cpp.status if getattr(worker.engine, "audio_cpp", None) else None,
+            "llm": worker.engine.llm.status if getattr(worker.engine, "llm", None) else None,
             "memory": dict(worker.engine.memory.status) if hasattr(worker.engine, "memory") else None,
         }
     )
@@ -109,6 +110,8 @@ async def presets(request):
             },
             "speech": {"instruction_groups": OMNI_INSTRUCTION_GROUPS, "models": [{"id": k, **v} for k, v in SPEECH_MODELS.items()], "languages": LANGUAGES, "reference_seconds": [0.2, 30]},
             "asr": {"models": [{"id": k, **v} for k, v in ASR_MODELS.items()], "languages": LANGUAGES, "max_seconds": 7200},
+            "llm": {"model": request.app["worker"].engine.llm.model, "concurrency": request.app["settings"].strata_concurrency}
+            if getattr(request.app["worker"].engine, "llm", None) else None,
             "music": {
                 "duration_range": MUSIC_DURATION_RANGE,
                 "default_duration": 120,

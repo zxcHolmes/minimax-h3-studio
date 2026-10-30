@@ -10,7 +10,7 @@ User=@USER@
 WorkingDirectory=@DIR@/server
 Environment=PYTHONUNBUFFERED=1
 Environment="H3_COMFYUI=@COMFYUI@"
-Environment="H3_DATA=@DIR@/data"
+Environment="H3_DATA=@DATA@"
 Environment="H3_WEB_DIST=@DIR@/web_dist"
 Environment="H3_HOST=@HOST@"
 Environment="H3_PORT=@PORT@"
@@ -18,7 +18,14 @@ Environment="H3_COMFY_ARGS=@COMFY_ARGS@"
 Environment="H3_AUDIOCPP_DIR=@AUDIOCPP_DIR@"
 Environment="H3_AUDIOCPP_PORT=@AUDIOCPP_PORT@"
 Environment="H3_AUDIOCPP_THREADS=@AUDIOCPP_THREADS@"
+Environment="H3_AUDIOCPP_INSTANCES=@AUDIOCPP_INSTANCES@"
 Environment="H3_AUDIOCPP_TIMEOUT=@AUDIOCPP_TIMEOUT@"
+Environment="H3_STRATA_DIR=@STRATA_DIR@"
+Environment="H3_STRATA_CONFIG=@STRATA_CONFIG@"
+Environment="H3_STRATA_PORT=@STRATA_PORT@"
+Environment="H3_STRATA_PARALLEL=@STRATA_PARALLEL@"
+Environment="H3_STRATA_CONCURRENCY=@STRATA_CONCURRENCY@"
+Environment="H3_STRATA_TIMEOUT=@STRATA_TIMEOUT@"
 # Runs inside the ComfyUI Python env (triton compiles kernels at run time and needs its env vars).
 ExecStart=/bin/bash -c '@ACTIVATE@exec @PYTHON@ @DIR@/server/app.py'
 Restart=on-failure
