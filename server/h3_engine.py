@@ -155,6 +155,8 @@ class H3Engine:
 
     def _lora_model(self, key, strength=1.0):
         """(model, sigmas, sampler) for a model choice at a LoRA strength on the resident DiT."""
+        import torch
+
         if (key, strength) not in self._models:
             # Keep the full-strength clones plus only the latest other strength: each holds its LoRA weights.
             for cached in [c for c in self._models if c[1] != 1.0]:
@@ -175,26 +177,36 @@ class H3Engine:
                         model, p["file"], strength
                     )[0]
                 sampler = self._sampler(p.get("sampler", "euler"))
-            if p.get("vsa"):
+            if p.get("vsa") or p.get("sol"):
                 from comfy_extras.nodes_model_advanced import ModelAttentionBackend
                 from comfy_extras.nodes_sparse_attention import BlockSparseAttention
 
                 model = ModelAttentionBackend.execute(
                     model=model, attention="comfy kitchen attention"
                 )[0]
+                if p.get("vsa"):
+                    selection = {"selection": "vsa", "keep_percent": p["vsa"]["keep"]}
+                    start = p["vsa"]["start"]
+                else:  # Sol-Attn: training-free, for bases without VSA's learned coarse branch
+                    selection = {"selection": "sol-attn", "tau": p["sol"]["tau"]}
+                    start = p["sol"]["start"]
                 model = BlockSparseAttention.execute(
                     model=model,
-                    selection={"selection": "vsa", "keep_percent": p["vsa"]["keep"]},
-                    start_percent=p["vsa"]["start"],
+                    selection=selection,
+                    start_percent=start,
                     end_percent=1.0,
                     dense_blocks="",
                     min_tokens=12288,
                     extra_tokens=256,
                     sink_conditioning="exact_kv_and_rows",
                 )[0]
-            sigmas = self.n["BasicScheduler"].execute(model, "simple", p["steps"], 1.0)[
-                0
-            ]
+            if p.get("sigmas"):
+                # Already shifted for the video stream; the DiT derives the audio sigmas from them.
+                sigmas = torch.tensor(p["sigmas"], dtype=torch.float32)
+            else:
+                sigmas = self.n["BasicScheduler"].execute(
+                    model, "simple", p["steps"], 1.0
+                )[0]
             self._models[(key, strength)] = (model, sigmas, sampler)
         return self._models[(key, strength)]
 

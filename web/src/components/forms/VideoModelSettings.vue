@@ -41,7 +41,7 @@ const emit = defineEmits(['pick-group'])
           @click="emit('pick-group', g.id)"
         >
           <span class="preset-name">{{ g.label }}</span>
-          <span class="preset-meta mono">{{ g.id === 'h3' ? 'base + LoRA' : 'distilled, no LoRA' }}</span>
+          <span class="preset-meta mono">{{ g.lora ? 'base + LoRA' : 'distilled, no LoRA' }}</span>
         </button>
       </div>
       <div class="loras" role="radiogroup" :aria-label="group === 'h3' ? 'LoRA' : 'Model'">

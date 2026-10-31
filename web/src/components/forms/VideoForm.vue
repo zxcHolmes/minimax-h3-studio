@@ -72,10 +72,11 @@ watch(mode, (m) => {
 })
 
 // The group and mode pick the base model; the list shows the choices that run on it at this resolution.
-// H3 bases take a LoRA; FastH3 bases are distilled and run on their own. Groups with no choice for the
-// mode are hidden (reference mode is FastH3 only).
+// H3 and Pika run a LoRA on the official bases; FastH3 bases are distilled and run on their own. Groups with no choice for the
+// mode are hidden.
 const groupOptions = computed(() => (props.groups || []).filter(
-  (g) => (props.loras || []).some((l) => l.group === g.id && l.family === FAMILY[mode.value])))
+  (g) => (props.loras || []).some((l) => l.group === g.id && l.family === FAMILY[mode.value])).map(
+  (g) => ({ ...g, lora: (props.loras || []).some((l) => l.group === g.id && l.models.lora) })))
 // The group the user picked; a mode that lacks it borrows another and gives it back afterwards.
 const pickedGroup = ref(group.value)
 function pickGroup(id) { group.value = id; pickedGroup.value = id }
@@ -93,7 +94,7 @@ watch([loraOptions, recommended], () => {
   if (loraOptions.value.length && !loraOptions.value.some((l) => l.id === lora.value)) lora.value = recommended.value
 }, { immediate: true })
 const currentLora = computed(() => props.loras?.find((l) => l.id === lora.value))
-// larryvrh and FastH3 keep the sampler they were distilled for.
+// larryvrh, FastH3 and Pika keep the sampler they were distilled for.
 const samplerChoosable = computed(() => !!currentLora.value && !currentLora.value.fixed && (props.samplers || []).includes(currentLora.value.models.sampler))
 const effectiveSampler = computed(() => (samplerChoosable.value && sampler.value) || currentLora.value?.models.sampler)
 
@@ -138,10 +139,14 @@ const { prompt, hasContent, toggleRaw, loadPrompt } = useVideoPrompt({ mode, ref
 const STEP_COST = {
   h3: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 0.95, '768p': 2.3 } },
   fasth3: { fl2va: { '544p': 0.65, '768p': 1.3 }, ref2va: { '544p': 0.7, '768p': 1.2 } },
+  pika: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 1.2, '768p': 2.6 } },
 }
 const OVERHEAD = { '544p': 12, '768p': 20 }
+// Sol-Attn sparse attention on Pika: sampling took ~55% of the dense time (both test shots).
+const SPARSE_COST = 0.55
 const estimate = computed(() => {
-  const cost = STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3
+  const sparse = currentLora.value?.models.attention?.startsWith('Sol') ? SPARSE_COST : 1
+  const cost = (STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3) * sparse
   return Math.round((OVERHEAD[resolution.value] || 20) + cost * (currentLora.value?.steps || 4) * duration.value)
 })
 

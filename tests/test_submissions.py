@@ -57,6 +57,26 @@ class SubmissionsTests(APIAppTestCase):
             self.assertEqual(job["mode"], mode)
             self.assertIsNone(job["mesh_options"])
 
+    async def test_pika_choices(self):
+        for fields, mode in (
+            ({"prompt": "A red panda", "resolution": "768p", "lora": "pika-flex-fl2va"}, "t2v"),
+            ({"prompt": "A zebra", "resolution": "544p", "lora": "pika-flex-ref2va"}, "r2v"),
+        ):
+            response = await self.client.post("/api/jobs", data=fields)
+            self.assertEqual(response.status, 201, await response.text())
+            job = await response.json()
+            self.assertEqual((job["mode"], job["lora"]), (mode, fields["lora"]))
+            self.assertEqual(job["models"]["sampler"], "lcm")
+            self.assertEqual(job["models"]["steps"], 6)
+        # Pika's schedule is fixed: a requested sampler or step count is not recorded.
+        response = await self.client.post(
+            "/api/jobs",
+            data={"prompt": "A red panda", "lora": "pika-flex-fl2va", "sampler": "euler", "steps": "12"},
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        job = await response.json()
+        self.assertEqual((job["models"]["sampler"], job["models"]["steps"]), ("lcm", 6))
+
     async def test_frame_reference_and_music_forms(self):
         def png_form(**fields):
             form = FormData()

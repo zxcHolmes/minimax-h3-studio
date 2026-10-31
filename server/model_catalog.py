@@ -33,6 +33,7 @@ RESOLUTIONS = {"544p": 960 * 544, "768p": 1344 * 768}
 GROUPS = {
     "h3": "MiniMax-H3 + LoRA",
     "fasth3": "FastVideo FastH3",
+    "pika": "Pika H3 Flex",
 }
 
 # Model choices. H3 entries are a LoRA on the family's base in UNETS; FastH3 entries
@@ -42,8 +43,13 @@ GROUPS = {
 # `vsa` turns on comfy_kitchen attention plus Video Sparse Attention as in the FastH3
 # ComfyUI templates. `fixed` keeps the template's sampler and steps whatever a job asks: FastH3 V2 is
 # distilled on a fixed 8-rung ladder and OmniRef fuses 4 of its 32 PDD output heads per Euler step,
-# so another sampler or step count leaves what they were trained for. Reference jobs run on FastH3 OmniRef only: the 4-step ref2v LoRAs
-# smeared large motion into streaks even at 6-8 steps.
+# so another sampler or step count leaves what they were trained for. The 4-step lightx2v ref2v LoRAs were removed: they
+# smeared large motion into streaks even at 6-8 steps. `sigmas` replaces the simple schedule with fixed (already shifted)
+# values, as Pika H3 Flex needs; `sol` turns on training-free Sol-Attn block-sparse attention (the same ComfyUI node as
+# VSA, whose method needs FastH3's learned coarse branch and so cannot run on the official bases); `source_path` is the file's path in its repo when not at the top level, `sha256` its hash.
+# Pika H3 Flex's six-step schedule: its knots 1000/750/500/250/100/40/0 after the video shift 12.
+PIKA_SIGMAS = (1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0)
+
 LORAS = {
     "lightx2v-8step-v1.0": {
         "group": "h3",
@@ -115,7 +121,52 @@ LORAS = {
         "fixed": True,
         "resolutions": ["544p", "768p"],
     },
+    # Pika H3 Flex: Comfy-format BF16 LoRAs on the official H3 bases, sampled like Comfy-Org's video_pika_h3_flex_*
+    # templates: lcm (fresh noise every step) over ManualSigmas, the knots 1000/750/500/250/100/40/0 at shift 12. Pika
+    # trains for 480p / 768p; generic 6-step sampling is not equivalent, so sampler and steps are fixed.
+    "pika-flex-fl2va": {
+        "group": "pika",
+        "family": "fl2va",
+        "source": "Pika-Labs/Pika-H3-Flex",
+        "source_path": "comfy/loras/pika_h3_flex_fl2va_comfy_bf16.safetensors",
+        "sha256": "68783e6447696ec365d13c0554941e070bee4cfea13c37da52498ec4f9a53f89",
+        "label": "Pika H3 Flex 6-step",
+        "loader": "core",
+        "file": "pika_h3_flex_fl2va_comfy_bf16.safetensors",
+        "sampler": "lcm",
+        "steps": 6,
+        "sigmas": PIKA_SIGMAS,
+        "shift_video": 12.0,
+        "shift_audio": 3.0,
+        "fixed": True,
+        "resolutions": ["544p", "768p"],
+    },
+    "pika-flex-ref2va": {
+        "group": "pika",
+        "family": "ref2va",
+        "source": "Pika-Labs/Pika-H3-Flex",
+        "source_path": "comfy/loras/pika_h3_flex_ref2va_comfy_bf16.safetensors",
+        "sha256": "e4d058fbd027377b925a0ee607b514ddd9037873fee3afa05d73b302e6f7f8e1",
+        "label": "Pika H3 Flex 6-step",
+        "loader": "core",
+        "file": "pika_h3_flex_ref2va_comfy_bf16.safetensors",
+        "sampler": "lcm",
+        "steps": 6,
+        "sigmas": PIKA_SIGMAS,
+        "shift_video": 12.0,
+        "shift_audio": 3.0,
+        "fixed": True,
+        "resolutions": ["544p", "768p"],
+    },
 }
+# Pika with sparse attention: the same LoRAs plus Sol-Attn (tau 1.3 keeps ~10% of key blocks exact) from start_percent
+# 0.2, which at shift 12 leaves only the first of the six steps dense. Pika was not trained for it: a speed option.
+for _key in ("pika-flex-fl2va", "pika-flex-ref2va"):
+    LORAS[_key + "-sparse"] = {
+        **LORAS[_key],
+        "label": "Pika H3 Flex 6-step + sparse attention",
+        "sol": {"tau": 1.3, "start": 0.2},
+    }
 
 # Recommended model choice per (family, resolution), used when a request names none.
 DEFAULT_LORAS = {
@@ -137,6 +188,7 @@ ASPECT_RATIOS = {"16:9": 16 / 9, "9:16": 9 / 16, "4:3": 4 / 3, "3:4": 3 / 4, "1:
 # Base checkpoints, all from the Comfy-Org/MiniMax-H3 repo (see scripts/prepare_models.py).
 UNETS = {
     "fl2va": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "ref2va": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
 }
 MAX_REFS = 6
 # Reference videos (ref2va): the node takes up to 3, 2-15 s at 24 fps. Their tokens join every attention call,
@@ -256,7 +308,7 @@ def sampler_name(lora, sampler=None):
 def model_info(lora, strength=1.0, sampler=None, steps=None):
     """The checkpoints and sampling settings a model choice runs on, as shown to users."""
     p = LORAS[lora]
-    vsa = p.get("vsa")
+    vsa, sol = p.get("vsa"), p.get("sol")
     return {
         "unet": unet_file(lora),
         "lora": p["file"],
@@ -265,7 +317,7 @@ def model_info(lora, strength=1.0, sampler=None, steps=None):
         "sampler": sampler_name(lora, sampler),
         "shift_video": p["shift_video"],
         "shift_audio": p["shift_audio"],
-        "attention": f"VSA {vsa['keep']}%" if vsa else None,
+        "attention": (f"VSA {vsa['keep']}%" if vsa else f"Sol-Attn τ{sol['tau']}" if sol else None),
     }
 
 

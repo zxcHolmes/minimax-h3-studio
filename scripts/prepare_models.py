@@ -62,6 +62,7 @@ GROUPS = (
     "ref2va",
     "lightx2v",
     "larryvrh",
+    "pika",
     "fasth3",
     "image",
     "music",
@@ -73,6 +74,9 @@ GROUPS = (
 )
 
 GROUPS = (*GROUPS, *AUDIO_GROUPS)
+# Pinned hashes of the LoRAs that publish one (verified after download and on existing files).
+LORA_CHECKSUMS = {v["file"]: v["sha256"] for v in LORAS.values() if v.get("sha256")}
+CHECKSUMS = IMAGE_CHECKSUMS | AUDIO_CHECKSUMS | LORA_CHECKSUMS
 
 
 def manifest():
@@ -98,8 +102,11 @@ def manifest():
                 )
             )
         if lora["file"]:
-            group = "larryvrh" if lora["loader"] == "larryvrh" else "lightx2v"
-            items.append((group, lora["source"], lora["file"], "loras", lora["file"]))
+            group = {"larryvrh": "larryvrh"}.get(lora["loader"]) or (
+                "pika" if lora["group"] == "pika" else "lightx2v"
+            )
+            path = lora.get("source_path", lora["file"])
+            items.append((group, lora["source"], path, "loras", lora["file"]))
     items += [
         (
             "image",
@@ -148,6 +155,8 @@ def manifest():
         for k in ("file", "unet")
         if lora.get(k)
     }
+    seen = set()
+    items = [it for it in items if (it[3], it[4]) not in seen and not seen.add((it[3], it[4]))]
     return [
         (
             g,
@@ -229,7 +238,7 @@ def main():
         dest = base / sub / name
         try:
             if dest.exists():
-                verify_checksum(dest, (IMAGE_CHECKSUMS | AUDIO_CHECKSUMS).get(name))
+                verify_checksum(dest, CHECKSUMS.get(name))
                 if group == "audio-runtime":
                     install_runtime(audio_root)
                 print(f"[{i}/{len(items)}] ok      {sub}/{name}")
@@ -239,7 +248,7 @@ def main():
             download(
                 (repo if repo.startswith("https://") else f"{endpoint}/{repo}/resolve/main/{path}"),
                 dest,
-                (IMAGE_CHECKSUMS | AUDIO_CHECKSUMS).get(name),
+                CHECKSUMS.get(name),
                 args.connections,
             )
             if group == "audio-runtime":

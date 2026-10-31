@@ -159,7 +159,7 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `fasth3`, `image`, `klein`, `qwen-image`, `audio`, `audio-runtime`, `qwen3_tts`, `voxcpm2`, `omnivoice`, `qwen3_asr`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `pika`, `fasth3`, `image`, `klein`, `qwen-image`, `audio`, `audio-runtime`, `qwen3_tts`, `voxcpm2`, `omnivoice`, `qwen3_asr`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
@@ -208,7 +208,7 @@ The models are under their own licenses (MiniMax-H3 Community License for the ba
 |---|---|---|
 | Text | fl2va | prompt |
 | Frames | fl2va | first frame, optional last frame |
-| Reference | FastH3 OmniRef (ref2va) | prompt, optional reference images (up to 6) and videos (up to 3) |
+| Reference | FastH3 OmniRef or ref2va + Pika H3 Flex | prompt, optional reference images (up to 6) and videos (up to 3) |
 | Picture / MOSS-Image | MOSS-Image | prompt; generation only |
 | Picture / FLUX.2 Klein 4B | distilled 4-step Klein | prompt; optional input images for editing |
 | Picture / Qwen Image 2.1 Turbo | 8-step Turbo int8 | prompt; optional input images for editing |
@@ -223,7 +223,7 @@ Finished jobs appear in the matching task-type history: videos play inline, song
 
 ![Two job cards: the same prompt with FastH3 V2 at 768p (71 s) and 544p (39 s)](doc/screenshots/cards.webp)
 
-Models come in two groups. **MiniMax-H3 + LoRA** runs the fl2va base model with a turbo LoRA for text and image modes (the recommended one is preselected):
+Models come in three groups. **MiniMax-H3 + LoRA** runs the fl2va base model with a turbo LoRA for text and image modes (the recommended one is preselected):
 
 | LoRA | Mode | Steps | Resolutions | 5 s clip on a 4090 |
 |---|---|---|---|---|
@@ -231,14 +231,25 @@ Models come in two groups. **MiniMax-H3 + LoRA** runs the fl2va base model with 
 | lightx2v 4-step v1.3 | text / image | 4 | 768p | ~64 s |
 | larryvrh v4 | text / image | 4 | 544p, 768p | ~31 s / ~67 s |
 
-**FastVideo FastH3** runs FastVideo's distilled 8-step checkpoints, and is the only group in reference mode, which replace the base model and take no LoRA. They use the settings of the ComfyUI FastH3 templates, including comfy_kitchen attention with Video Sparse Attention (keep 10%):
+**FastVideo FastH3** runs FastVideo's distilled 8-step checkpoints, which replace the base model and take no LoRA. They use the settings of the ComfyUI FastH3 templates, including comfy_kitchen attention with Video Sparse Attention (keep 10%):
 
 | Model | Mode | Sampler | Shift | 5 s clip on a 4090 |
 |---|---|---|---|---|
 | FastH3 V2 8-step | text / image | res_multistep | 10/3 | ~39 s (544p) / ~71 s (768p) |
 | FastH3 OmniRef 8-step | reference | euler | 12/3 | ~41 s (544p) / ~67 s (768p) |
 
-Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base; they smeared fast motion (swinging sleeves, blades) into streaks even at 6–8 steps, so they were removed in favour of OmniRef. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
+**Pika H3 Flex** puts Pika's Comfy-format BF16 LoRAs (`Pika-Labs/Pika-H3-Flex`, `comfy/loras/`) on the official fl2va and ref2va bases, one for text / image modes and one for reference mode. It samples like Comfy-Org's `video_pika_h3_flex_*` templates: the `lcm` sampler (fresh noise every step) over six fixed sigmas `1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0` (Pika's knots 1000/750/500/250/100/40/0 at shift 12; audio shift 3), so the sampler and steps cannot be changed. Pika trains for 480p / 768p; 544p works as well.
+
+| Model | Mode | Sampler | Shift | Measured on a 4090 |
+|---|---|---|---|---|
+| Pika H3 Flex 6-step | text / image | lcm, 6 fixed sigmas | 12/3 | 5 s at 768p: ~81 s (sampling 69 s) |
+| Pika H3 Flex 6-step | reference | lcm, 6 fixed sigmas | 12/3 | 10.8 s at 544p, one reference image + guide audio: ~95 s (sampling 79 s) |
+| Pika H3 Flex 6-step + sparse attention | text / image | same | 12/3 | 5 s at 768p: ~50 s (sampling 38 s) |
+| Pika H3 Flex 6-step + sparse attention | reference | same | 12/3 | the same 10.8 s shot: ~59 s (sampling 43 s) |
+
+Pika runs dense attention, which is why it is slower than FastH3 although it takes fewer steps: FastH3 uses Video Sparse Attention (VSA). VSA needs the coarse attention branch FastH3 learned in training, so it cannot run on the official bases. The **+ sparse attention** choices use the training-free Sol-Attn method of the same ComfyUI node instead: tau 1.3 (about 10% of key blocks computed exactly), dense for the first of the six steps (start 0.2), with text, reference and audio rows kept exact. That cut sampling by about 45%. On the two test shots, picture quality, subject identity and motion held up; the shots diverge from the dense ones, as any change to attention makes them do. Pika was not trained for sparse attention, so the dense choice stays the recommended one.
+
+Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base; they smeared fast motion (swinging sleeves, blades) into streaks even at 6–8 steps, so they were removed in favour of OmniRef. Pika's ref2va LoRA, on the same base, kept the fast sword dance that broke them free of streaks. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 
 **MOSS-Image pictures** use MOSS-Image with the settings of the ComfyUI template: 25 steps, cfg 2.5, er_sde, simple scheduler, about one megapixel (1024×1024 for 1:1). Write the prompt as a detailed English caption; the template's LLM prompt expansion is not used (it took ~45 s and made results worse), since the agent or person writing prompts already does that. A picture takes about 10–16 s on a 4090 depending on the prompt; the first picture job also loads the MOSS models. The video models stay resident. A finished picture's **Reference** and **Frame** buttons add it to the reference images or set it as the first frame of the video form. MOSS supports generation only; use Klein or Qwen below for image editing.
 
@@ -407,7 +418,7 @@ See **[the complete API guide](doc/api.md)** for every model's parameters and cu
 | DELETE | `/api/jobs/{id}` | delete a finished job and its files |
 | POST | `/api/unload` | free the GPU for another program while nothing is running or queued (409 otherwise); returns `vram_free_mb` / `vram_total_mb`, and the next job reloads its models |
 
-`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA or FastH3 model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh and FastH3), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for larryvrh and FastH3), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image` / `ref_video`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Reference videos (up to 3, at least 2 s) come after the images: the prompt calls them `<Video 1>`, `<Video 2>`, and the soundtrack of a video with audio is `<Audio k>`. The server trims each to the shot's length and scales it down to the shot's pixel area. Their tokens join every attention call, so a reference video costs time: a 5 s 544p shot takes ~100 s of sampling instead of ~26 s, 768p ~145 s, and 15 s with a 15 s reference ~560 s on a 4090. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
+`POST /api/jobs` fields: `prompt`, `resolution` (`544p` / `768p`), `lora` (optional; a LoRA, FastH3 or Pika model id, defaults to the recommended LoRA), `lora_strength` (optional, 0–2, default 1; ignored for FastH3), `sampler` (optional, `euler` / `res_multistep` / `er_sde`; defaults to the model choice's own sampler, ignored for larryvrh, FastH3 and Pika), `steps` (optional, 1–30; defaults to the model choice's own count, ignored for larryvrh, FastH3 and Pika), `duration` (2–15 s), `seed` (optional), `aspect_ratio` (`16:9`, `9:16`, `4:3`, `3:4`, `1:1`, or `image` to follow the input picture), and files `image`, `last_image` or repeated `ref_image` / `ref_video`. A ref2va `lora` runs a reference job even with no `ref_image`, on the prompt alone. Reference videos (up to 3, at least 2 s) come after the images: the prompt calls them `<Video 1>`, `<Video 2>`, and the soundtrack of a video with audio is `<Audio k>`. The server trims each to the shot's length and scales it down to the shot's pixel area. Their tokens join every attention call, so a reference video costs time: a 5 s 544p shot takes ~100 s of sampling instead of ~26 s, 768p ~145 s, and 15 s with a 15 s reference ~560 s on a 4090. Optional `audio` (an audio file) with `audio_start` (seconds into the file, default 0) anchors that slice of the audio as the shot's soundtrack from the first frame; it works in every video mode.
 
 A picture job sends `kind=image`, `image_model` (`moss`, `flux-klein-4b`, `qwen-image-21-turbo`), `prompt`, `aspect_ratio` and optional `seed`. Klein and Qwen also accept input images for editing; `aspect_ratio=image` follows the first input and is required for Qwen editing. The finished job has `picture_url`.
 
