@@ -228,7 +228,7 @@ Models come in three groups. **MiniMax-H3 + LoRA** runs the fl2va base model wit
 
 | LoRA | Mode | Steps | Resolutions | 5 s clip on a 4090 |
 |---|---|---|---|---|
-| larryvrh v4 4-step · sparse (recommended) | text / image | 4 | 544p, 768p | 768p: ~39 s (sampling 27 s) |
+| larryvrh v4 4-step · sparse (recommended) | text / image | 4 | 544p, 768p | ~22 s / ~38 s (sampling 14 s / 26 s) |
 | larryvrh v4 4-step | text / image | 4 | 544p, 768p | ~31 s / ~67 s |
 
 The lightx2v turbo LoRAs were removed on 2026-10-31.
@@ -242,16 +242,18 @@ The lightx2v turbo LoRAs were removed on 2026-10-31.
 
 **Pika H3 Flex** puts Pika's Comfy-format BF16 LoRAs (`Pika-Labs/Pika-H3-Flex`, `comfy/loras/`) on the official fl2va and ref2va bases, one for text / image modes and one for reference mode. It samples like Comfy-Org's `video_pika_h3_flex_*` templates: the `lcm` sampler (fresh noise every step) over six fixed sigmas `1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0` (Pika's knots 1000/750/500/250/100/40/0 at shift 12; audio shift 3), so the sampler and steps cannot be changed. Pika trains for 480p / 768p; 544p works as well.
 
-| Model | Mode | Sampler | Shift | Measured on a 4090 |
-|---|---|---|---|---|
-| Pika H3 Flex 6-step | text / image | lcm, 6 fixed sigmas | 12/3 | 5 s at 768p: ~81 s (sampling 69 s) |
-| Pika H3 Flex 6-step | reference | lcm, 6 fixed sigmas | 12/3 | 10.8 s at 544p, one reference image + guide audio: ~95 s (sampling 79 s) |
-| Pika H3 Flex 6-step · sparse (recommended) | text / image | same | 12/3 | 5 s at 768p: ~46 s (sampling 34 s) |
-| Pika H3 Flex 6-step · sparse | reference | same | 12/3 | the same 10.8 s shot: ~54 s (sampling 39 s) |
-| Pika H3 Flex 6-step · sparse, dense 1st step | text / image | same | 12/3 | 5 s at 768p: ~50 s (sampling 38 s) |
-| Pika H3 Flex 6-step · sparse, dense 1st step | reference | same | 12/3 | the same 10.8 s shot: ~59 s (sampling 43 s) |
+| Choice | Mode | 544p | 768p |
+|---|---|---|---|
+| Pika H3 Flex 6-step · sparse (recommended) | text / image, 5 s | ~25 s (sampling 17 s) | ~45 s (sampling 34 s) |
+| Pika H3 Flex 6-step · sparse (recommended) | reference, 10.8 s, one image + guide audio | ~54 s (sampling 39 s) | ~108 s (sampling 84 s) |
+| Pika H3 Flex 6-step · sparse, dense 1st step | text / image, 5 s | | ~50 s (sampling 38 s) |
+| Pika H3 Flex 6-step · sparse, dense 1st step | reference, the same 10.8 s shot | ~59 s (sampling 43 s) | |
+| Pika H3 Flex 6-step · dense | text / image, 5 s | | ~81 s (sampling 69 s) |
+| Pika H3 Flex 6-step · dense | reference, the same 10.8 s shot | ~95 s (sampling 79 s) | |
 
-Pika runs dense attention, which is why it is slower than FastH3 although it takes fewer steps: FastH3 uses Video Sparse Attention (VSA). VSA needs the coarse attention branch FastH3 learned in training, so it cannot run on the official bases. The **sparse** choices use the training-free Sol-Attn method of the same ComfyUI node instead: tau 1.3 (about 10% of key blocks computed exactly), with text, reference and audio rows kept exact. The recommended one runs all six steps sparse and halves sampling; the other keeps the first step dense (start 0.2) for about 4 s more. On the two test shots, picture quality, subject identity and motion held up in both; the shots diverge from the dense ones, as any change to attention makes them do. Pika was not trained for sparse attention; the dense choice reproduces Pika's templates.
+All Pika choices use lcm over the six fixed sigmas at shift 12/3. Sparse attention saves the most at 768p: its gain grows with the sequence length, and 544p sequences are about half as long. Measured on a 4090 on 2026-10-31.
+
+Dense Pika is slower than FastH3 although it takes fewer steps, because FastH3 uses Video Sparse Attention (VSA). VSA needs the coarse attention branch FastH3 learned in training, so it cannot run on the official bases. The **sparse** choices use the training-free Sol-Attn method of the same ComfyUI node instead: tau 1.3 (about 10% of key blocks computed exactly), with text, reference and audio rows kept exact. The recommended one runs all six steps sparse and halves sampling; the other keeps the first step dense (start 0.2) for about 4 s more. On the two test shots, picture quality, subject identity and motion held up in both; the shots diverge from the dense ones, as any change to attention makes them do. Pika was not trained for sparse attention; the dense choice reproduces Pika's templates.
 
 Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base; they smeared fast motion (swinging sleeves, blades) into streaks even at 6–8 steps, so they were removed in favour of OmniRef. Pika's ref2va LoRA, on the same base, kept the fast sword dance that broke them free of streaks. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 

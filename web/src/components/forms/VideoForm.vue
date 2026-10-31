@@ -133,20 +133,31 @@ const ticks = computed(() => {
 
 const { prompt, hasContent, toggleRaw, loadPrompt } = useVideoPrompt({ mode, refs, refVideos, frames, rawMode, raw, sections, error })
 
-// Measured on the RTX 4090 (int8 bases, kitchen CUDA + triton backends, sage): sampling seconds per step per second of
-// video, plus encode/decode/save. Switching base model costs well under a second.
-// FastH3 runs with sparse attention (VSA), which makes its steps cheaper.
+// Measured on the RTX 4090 (int8 bases, kitchen CUDA + triton backends): sampling seconds per step per second of video.
+// Dense choices use sage attention; FastH3 runs VSA and the `sparse` choices Sol-Attn, which make steps cheaper. Sparse
+// attention saves more at 768p, whose longer sequences it was made for. Switching base model costs well under a second.
 const STEP_COST = {
-  h3: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 0.95, '768p': 2.3 } },
+  h3: { fl2va: { '544p': 0.85, '768p': 2.4 } },
   fasth3: { fl2va: { '544p': 0.65, '768p': 1.3 }, ref2va: { '544p': 0.7, '768p': 1.2 } },
   pika: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 1.2, '768p': 2.6 } },
 }
-const OVERHEAD = { '544p': 12, '768p': 20 }
-// Sol-Attn sparse attention on Pika: sampling took ~50% of the dense time with every step sparse, ~55% with a dense 1st step.
-const sparseCost = (attention) => (attention?.startsWith('Sol') ? (attention.includes('dense') ? 0.55 : 0.5) : 1)
+// Every step sparse (2026-10-31: larryvrh 14 / 26 s, Pika t2v 17 / 34 s for 5 s; Pika r2v 39 / 84 s for 10.8 s).
+const SPARSE_STEP_COST = {
+  h3: { fl2va: { '544p': 0.7, '768p': 1.32 } },
+  pika: { fl2va: { '544p': 0.57, '768p': 1.12 }, ref2va: { '544p': 0.6, '768p': 1.28 } },
+}
+// Encoding, decoding and saving: seconds plus seconds per second of video.
+const OVERHEAD = { '544p': [2, 1.25], '768p': [1.5, 2.1] }
 const estimate = computed(() => {
-  const cost = (STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3) * sparseCost(currentLora.value?.models.attention)
-  return Math.round((OVERHEAD[resolution.value] || 20) + cost * (currentLora.value?.steps || 4) * duration.value)
+  const attention = currentLora.value?.models.attention
+  const family = FAMILY[mode.value]
+  const dense = STEP_COST[group.value]?.[family]?.[resolution.value] || 3.3
+  const sparse = SPARSE_STEP_COST[group.value]?.[family]?.[resolution.value] || dense * 0.5
+  // A dense first step costs one dense step's share more.
+  const steps = currentLora.value?.steps || 4
+  const perStep = !attention?.startsWith('Sol') ? dense : attention.includes('dense') ? sparse + (dense - sparse) / steps : sparse
+  const [base, perSecond] = OVERHEAD[resolution.value] || [2, 2.1]
+  return Math.round(base + perSecond * duration.value + perStep * steps * duration.value)
 })
 
 const canSubmit = computed(() => props.ready && !submitting.value && hasContent.value && (mode.value !== 'i2v' || !!imageFile.value))
