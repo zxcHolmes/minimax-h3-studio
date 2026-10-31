@@ -60,7 +60,6 @@ GROUPS = (
     "shared",
     "fl2va",
     "ref2va",
-    "lightx2v",
     "larryvrh",
     "pika",
     "fasth3",
@@ -102,9 +101,7 @@ def manifest():
                 )
             )
         if lora["file"]:
-            group = {"larryvrh": "larryvrh"}.get(lora["loader"]) or (
-                "pika" if lora["group"] == "pika" else "lightx2v"
-            )
+            group = "larryvrh" if lora["loader"] == "larryvrh" else lora["group"]
             path = lora.get("source_path", lora["file"])
             items.append((group, lora["source"], path, "loras", lora["file"]))
     items += [

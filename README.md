@@ -3,7 +3,7 @@
 A self-hosted web studio for [MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) audio-video generation on a single GPU machine. It drives ComfyUI as a Python library (no ComfyUI UI, no workflow JSON) so it can use the quantized ComfyUI checkpoints and ComfyUI's dynamic VRAM offloading, and puts a resident job server and a browser UI in front of it.
 
 - **Text to video**, **image to video** (first frame, or first + last frame) and **references to video** (up to 6 images and 3 videos; a reference video passes on its motion, camera, scene and sound).
-- Turbo LoRAs (4 / 8 steps) from [lightx2v](https://huggingface.co/lightx2v/Minimax-h3-Turbo) and [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora), selectable per job; the base model follows the mode automatically.
+- Turbo LoRAs from [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) (4 steps) and [Pika H3 Flex](https://huggingface.co/Pika-Labs/Pika-H3-Flex) (6 steps), optionally with training-free sparse attention, plus FastVideo's FastH3 bases, selectable per job; the base model follows the mode automatically.
 - **Picture generation and editing** with [MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/Flux-2-Klein-4B) (4 steps) and [Qwen Image 2.1 Turbo](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) (8 steps). Klein and Qwen edit input images; a finished picture goes into editing, video or 3D with one click.
 - **Image to 3D** with [Pixal3D](https://huggingface.co/Comfy-Org/Pixal3D): a single image becomes a textured GLB, with interactive rotation/zoom and download.
 - **Speech and transcription** through native [audio.cpp](https://github.com/0xShug0/audio.cpp) CUDA server: Qwen3-TTS, VoxCPM2 and OmniVoice for generation/cloning/design; Qwen3-ASR for uploaded audio/video transcription and supported subtitle exports.
@@ -159,14 +159,15 @@ python3 scripts/prepare_models.py --list                    # show files and sou
 python3 scripts/prepare_models.py --comfyui ... --skip ref2va fasth3
 ```
 
-Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `lightx2v`, `larryvrh`, `pika`, `fasth3`, `image`, `klein`, `qwen-image`, `audio`, `audio-runtime`, `qwen3_tts`, `voxcpm2`, `omnivoice`, `qwen3_asr`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
+Groups for `--skip` / `--only`: `shared`, `fl2va`, `ref2va`, `larryvrh`, `pika`, `fasth3`, `image`, `klein`, `qwen-image`, `audio`, `audio-runtime`, `qwen3_tts`, `voxcpm2`, `omnivoice`, `qwen3_asr`, `music`, `upscale`, `flashvsr`, `pixal3d`. `image` includes all three picture models; `klein` and `qwen-image` select only the new models. With `./deploy.sh models`, extra arguments are passed through (`./deploy.sh models --skip ref2va`).
 
 | File | Folder | Source | Size |
 |---|---|---|---|
 | `qwen3vl_32b_minimax_h3_nvfp4_awq` (text encoder) | `text_encoders` | Comfy-Org/MiniMax-H3 | 15.7 GB |
 | `minimax_h3_video_vae_int8_convrot`, `minimax_h3_audio_vae_fp32` | `vae` | Comfy-Org/MiniMax-H3 | 3.4 GB |
 | `minimax_h3_fl2va_pruned_int8_convrot` (text / image to video) | `diffusion_models` | Comfy-Org/MiniMax-H3 | 21 GB |
-| lightx2v fl2v turbo LoRAs (2 files) | `loras` | lightx2v/Minimax-h3-Turbo | 2 GB each |
+| `minimax_h3_ref2va_pruned_int8_convrot` (reference, Pika) | `diffusion_models` | Comfy-Org/MiniMax-H3 | 21 GB |
+| Pika H3 Flex LoRAs (fl2va, ref2va) | `loras` | Pika-Labs/Pika-H3-Flex | 2 GB each |
 | `minimax_h3_turbo_v4_step600_ema` | `loras` | larryvrh/MiniMax-H3-Turbo-Lora | 0.8 GB |
 | `fastvideo_fasth3_8step_v2_pruned_int8_convrot` (FastH3, text / image) | `diffusion_models` | FastVideo/FastVideo-FastH3-Comfy | 22 GB |
 | `fasth3_omniref_8step_pruned_int8_convrot` (FastH3, reference) | `diffusion_models` | FastVideo/FastH3-Omni-Comfy | 22 GB |
@@ -223,13 +224,14 @@ Finished jobs appear in the matching task-type history: videos play inline, song
 
 ![Two job cards: the same prompt with FastH3 V2 at 768p (71 s) and 544p (39 s)](doc/screenshots/cards.webp)
 
-Models come in three groups. **MiniMax-H3 + LoRA** runs the fl2va base model with a turbo LoRA for text and image modes (the recommended one is preselected):
+Models come in three groups. **MiniMax-H3 + LoRA** runs the fl2va base model with larryvrh's turbo LoRA for text and image modes. The recommended **sparse** choice adds the same training-free Sol-Attn sparse attention as Pika's sparse choices (described below), which halved sampling with comparable quality:
 
 | LoRA | Mode | Steps | Resolutions | 5 s clip on a 4090 |
 |---|---|---|---|---|
-| lightx2v 8-step v1.0 | text / image | 8 | 544p | ~45 s |
-| lightx2v 4-step v1.3 | text / image | 4 | 768p | ~64 s |
-| larryvrh v4 | text / image | 4 | 544p, 768p | ~31 s / ~67 s |
+| larryvrh v4 4-step · sparse (recommended) | text / image | 4 | 544p, 768p | 768p: ~39 s (sampling 27 s) |
+| larryvrh v4 4-step | text / image | 4 | 544p, 768p | ~31 s / ~67 s |
+
+The lightx2v turbo LoRAs were removed on 2026-10-31.
 
 **FastVideo FastH3** runs FastVideo's distilled 8-step checkpoints, which replace the base model and take no LoRA. They use the settings of the ComfyUI FastH3 templates, including comfy_kitchen attention with Video Sparse Attention (keep 10%):
 
@@ -244,10 +246,12 @@ Models come in three groups. **MiniMax-H3 + LoRA** runs the fl2va base model wit
 |---|---|---|---|---|
 | Pika H3 Flex 6-step | text / image | lcm, 6 fixed sigmas | 12/3 | 5 s at 768p: ~81 s (sampling 69 s) |
 | Pika H3 Flex 6-step | reference | lcm, 6 fixed sigmas | 12/3 | 10.8 s at 544p, one reference image + guide audio: ~95 s (sampling 79 s) |
-| Pika H3 Flex 6-step + sparse attention | text / image | same | 12/3 | 5 s at 768p: ~50 s (sampling 38 s) |
-| Pika H3 Flex 6-step + sparse attention | reference | same | 12/3 | the same 10.8 s shot: ~59 s (sampling 43 s) |
+| Pika H3 Flex 6-step · sparse (recommended) | text / image | same | 12/3 | 5 s at 768p: ~46 s (sampling 34 s) |
+| Pika H3 Flex 6-step · sparse | reference | same | 12/3 | the same 10.8 s shot: ~54 s (sampling 39 s) |
+| Pika H3 Flex 6-step · sparse, dense 1st step | text / image | same | 12/3 | 5 s at 768p: ~50 s (sampling 38 s) |
+| Pika H3 Flex 6-step · sparse, dense 1st step | reference | same | 12/3 | the same 10.8 s shot: ~59 s (sampling 43 s) |
 
-Pika runs dense attention, which is why it is slower than FastH3 although it takes fewer steps: FastH3 uses Video Sparse Attention (VSA). VSA needs the coarse attention branch FastH3 learned in training, so it cannot run on the official bases. The **+ sparse attention** choices use the training-free Sol-Attn method of the same ComfyUI node instead: tau 1.3 (about 10% of key blocks computed exactly), dense for the first of the six steps (start 0.2), with text, reference and audio rows kept exact. That cut sampling by about 45%. On the two test shots, picture quality, subject identity and motion held up; the shots diverge from the dense ones, as any change to attention makes them do. Pika was not trained for sparse attention, so the dense choice stays the recommended one.
+Pika runs dense attention, which is why it is slower than FastH3 although it takes fewer steps: FastH3 uses Video Sparse Attention (VSA). VSA needs the coarse attention branch FastH3 learned in training, so it cannot run on the official bases. The **sparse** choices use the training-free Sol-Attn method of the same ComfyUI node instead: tau 1.3 (about 10% of key blocks computed exactly), with text, reference and audio rows kept exact. The recommended one runs all six steps sparse and halves sampling; the other keeps the first step dense (start 0.2) for about 4 s more. On the two test shots, picture quality, subject identity and motion held up in both; the shots diverge from the dense ones, as any change to attention makes them do. Pika was not trained for sparse attention; the dense choice reproduces Pika's templates.
 
 Reference mode used to offer the lightx2v ref2v 4-step LoRAs on the ref2va base; they smeared fast motion (swinging sleeves, blades) into streaks even at 6–8 steps, so they were removed in favour of OmniRef. Pika's ref2va LoRA, on the same base, kept the fast sword dance that broke them free of streaks. FastH3 needs a comfy_kitchen build whose CUDA kernels match the driver (the cu13 wheel fails on CUDA 12.8 drivers; rebuild it from source with `COMFY_CUDA_ARCHS` set). With torch older than cu130, stock ComfyUI disables comfy_kitchen's CUDA backend in `comfy/quant_ops.py` even when it works; keeping it enabled (only disable it when its ops fail to load) made every model 17–48% faster on the 4090, the timings above. Keep `--enable-triton-backend` as well. Switching between groups swaps the resident base model, which takes about a second plus the first-use load from disk.
 

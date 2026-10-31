@@ -142,11 +142,10 @@ const STEP_COST = {
   pika: { fl2va: { '544p': 0.85, '768p': 2.3 }, ref2va: { '544p': 1.2, '768p': 2.6 } },
 }
 const OVERHEAD = { '544p': 12, '768p': 20 }
-// Sol-Attn sparse attention on Pika: sampling took ~55% of the dense time (both test shots).
-const SPARSE_COST = 0.55
+// Sol-Attn sparse attention on Pika: sampling took ~50% of the dense time with every step sparse, ~55% with a dense 1st step.
+const sparseCost = (attention) => (attention?.startsWith('Sol') ? (attention.includes('dense') ? 0.55 : 0.5) : 1)
 const estimate = computed(() => {
-  const sparse = currentLora.value?.models.attention?.startsWith('Sol') ? SPARSE_COST : 1
-  const cost = (STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3) * sparse
+  const cost = (STEP_COST[group.value]?.[FAMILY[mode.value]]?.[resolution.value] || 3.3) * sparseCost(currentLora.value?.models.attention)
   return Math.round((OVERHEAD[resolution.value] || 20) + cost * (currentLora.value?.steps || 4) * duration.value)
 })
 

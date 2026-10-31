@@ -71,17 +71,20 @@ Useful `presets` fields:
 
 ### Model selection
 
-Despite its name, `lora` also selects FastH3 base models that do not use a LoRA.
+Despite its name, `lora` also selects FastH3 base models that do not use a LoRA. `-sparse` choices add training-free Sol-Attn sparse attention, which roughly halves sampling time.
 
 | `lora` | Supported inputs | Resolutions | Default steps | Sampling overrides |
 |---|---|---|---|---|
-| `lightx2v-8step-v1.0` | Text, first frame, first + last frame | `544p` | 8 | Sampler / steps can be overridden |
-| `lightx2v-4step-v1.3` | Text, first frame, first + last frame | `768p` | 4 | Sampler / steps can be overridden |
+| `larryvrh-v4-sparse` | Text, first frame, first + last frame | `544p` / `768p` | 4 | Fixed custom sampler / steps; sparse attention |
 | `larryvrh-v4` | Text, first frame, first + last frame | `544p` / `768p` | 4 | Fixed custom sampler / steps |
+| `pika-flex-fl2va-sparse-all` | Text, first frame, first + last frame | `544p` / `768p` | 6 | Fixed sampler / steps; sparse attention |
+| `pika-flex-fl2va-sparse` / `pika-flex-fl2va` | Text, first frame, first + last frame | `544p` / `768p` | 6 | Fixed; sparse with a dense first step / dense |
+| `pika-flex-ref2va-sparse-all` | Reference images/videos, or no references | `544p` / `768p` | 6 | Fixed sampler / steps; sparse attention |
+| `pika-flex-ref2va-sparse` / `pika-flex-ref2va` | Reference images/videos, or no references | `544p` / `768p` | 6 | Fixed; sparse with a dense first step / dense |
 | `fasth3-v2` | Text, first frame, first + last frame | `544p` / `768p` | 8 | Fixed sampler / steps |
 | `fasth3-omniref` | Reference images/videos, or no references | `544p` / `768p` | 8 | Fixed sampler / steps |
 
-When `lora` is omitted, ordinary video jobs default to LightX2V 8-step at 544p or LightX2V 4-step at 768p. Jobs with reference images/videos default to OmniRef.
+When `lora` is omitted, ordinary video jobs default to `larryvrh-v4-sparse`. Jobs with reference images/videos default to OmniRef.
 
 ### Parameters
 
@@ -115,7 +118,7 @@ curl --fail-with-body "$STUDIO_URL/api/jobs" \
 ```bash
 curl --fail-with-body "$STUDIO_URL/api/jobs" \
   -F kind=video -F resolution=768p -F duration=5 -F aspect_ratio=image \
-  -F lora=lightx2v-4step-v1.3 -F 'image=@first.png' \
+  -F lora=larryvrh-v4-sparse -F 'image=@first.png' \
   --form-string 'prompt=<Picture 1> The character looks up and smiles, with a slow camera push-in.'
 
 # For first + last frame mode, also add -F 'last_image=@last.png'.

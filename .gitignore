@@ -34,3 +34,4 @@ htmlcov/
 audio_cpp/
 *.gguf
 audio-v*-bin-*.tar.gz
+pika-lora

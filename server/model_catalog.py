@@ -51,30 +51,6 @@ GROUPS = {
 PIKA_SIGMAS = (1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0)
 
 LORAS = {
-    "lightx2v-8step-v1.0": {
-        "group": "h3",
-        "family": "fl2va",
-        "source": "lightx2v/Minimax-h3-Turbo",
-        "label": "lightx2v 8-step v1.0",
-        "loader": "core",
-        "file": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        "steps": 8,
-        "shift_video": 12.0,
-        "shift_audio": 3.0,
-        "resolutions": ["544p"],
-    },
-    "lightx2v-4step-v1.3": {
-        "group": "h3",
-        "family": "fl2va",
-        "source": "lightx2v/Minimax-h3-Turbo",
-        "label": "lightx2v 4-step v1.3",
-        "loader": "core",
-        "file": "minimax_h3_fl2v_turbo_4step_v1.3_768p_comfyui_bf16.safetensors",
-        "steps": 4,
-        "shift_video": 6.0,
-        "shift_audio": 3.0,
-        "resolutions": ["768p"],
-    },
     # Needs its own LoRA node (adaLN on the pruned base) and its own 4-step sampler.
     "larryvrh-v4": {
         "group": "h3",
@@ -159,23 +135,44 @@ LORAS = {
         "resolutions": ["544p", "768p"],
     },
 }
-# Pika with sparse attention: the same LoRAs plus Sol-Attn (tau 1.3 keeps ~10% of key blocks exact) from start_percent
-# 0.2, which at shift 12 leaves only the first of the six steps dense. Pika was not trained for it: a speed option.
+# Pika with sparse attention: the same LoRAs plus Sol-Attn (tau 1.3 keeps ~10% of key blocks exact). `-sparse-all` runs
+# every step sparse (start 0); `-sparse` keeps the first of the six steps dense (start 0.2 at shift 12); the plain keys
+# stay dense as in Pika's templates. Pika was not trained for sparse attention; it is a speed choice. The frontend
+# recommends the first choice of a group, so each family lists all-sparse, first-step dense, dense, in that order.
 for _key in ("pika-flex-fl2va", "pika-flex-ref2va"):
+    _dense = LORAS.pop(_key)
+    LORAS[_key + "-sparse-all"] = {
+        **_dense,
+        "label": "Pika H3 Flex 6-step · sparse",
+        "sol": {"tau": 1.3, "start": 0.0},
+    }
     LORAS[_key + "-sparse"] = {
-        **LORAS[_key],
-        "label": "Pika H3 Flex 6-step + sparse attention",
+        **_dense,
+        "label": "Pika H3 Flex 6-step · sparse, dense 1st step",
         "sol": {"tau": 1.3, "start": 0.2},
     }
+    LORAS[_key] = {**_dense, "label": "Pika H3 Flex 6-step · dense"}
+
+# larryvrh with every step sparse, listed right after its dense entry; same Sol-Attn settings as Pika. Sampling halved
+# (49 -> 27 s for 5 s at 768p) with comparable quality, so it is the recommended H3 choice.
+_order = list(LORAS)
+for _key in ("larryvrh-v4",):
+    LORAS[_key + "-sparse"] = {
+        **LORAS[_key],
+        "label": LORAS[_key]["label"] + " · sparse",
+        "sol": {"tau": 1.3, "start": 0.0},
+    }
+    _order.insert(_order.index(_key) + 1, _key + "-sparse")
+LORAS = {k: LORAS[k] for k in _order}
 
 # Recommended model choice per (family, resolution), used when a request names none.
 DEFAULT_LORAS = {
-    "fl2va": {"544p": "lightx2v-8step-v1.0", "768p": "lightx2v-4step-v1.3"},
+    "fl2va": {"544p": "larryvrh-v4-sparse", "768p": "larryvrh-v4-sparse"},
     "ref2va": {"544p": "fasth3-omniref", "768p": "fasth3-omniref"},
 }
 
-# Jobs created before LoRA selection stored a combined preset id instead. The ref ids name
-# LoRAs that are gone; those jobs keep the models they ran on in result.models.
+# Jobs created before LoRA selection stored a combined preset id instead. All of these name
+# LoRAs that are gone (lightx2v was removed); those jobs keep the models they ran on in result.models.
 LEGACY_PRESETS = {
     "544p": ("544p", "lightx2v-8step-v1.0"),
     "768p": ("768p", "lightx2v-4step-v1.3"),
@@ -317,7 +314,11 @@ def model_info(lora, strength=1.0, sampler=None, steps=None):
         "sampler": sampler_name(lora, sampler),
         "shift_video": p["shift_video"],
         "shift_audio": p["shift_audio"],
-        "attention": (f"VSA {vsa['keep']}%" if vsa else f"Sol-Attn τ{sol['tau']}" if sol else None),
+        "attention": (
+            f"VSA {vsa['keep']}%"
+            if vsa
+            else f"Sol-Attn τ{sol['tau']}{', dense 1st step' if sol['start'] else ''}" if sol else None
+        ),
     }
 
 
