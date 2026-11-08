@@ -52,6 +52,7 @@ def generate(
     steps = steps or LORAS[lora]["steps"]
 
     def stage(name):
+        engine._after_node()
         on_progress(name, 0.0)
         timings[name] = time.perf_counter()
 
@@ -140,6 +141,7 @@ def generate(
     except engine.mm.InterruptProcessingException:
         raise Canceled()
     finally:
+        engine._after_node()
         engine.utils.set_progress_bar_global_hook(None)
         engine.mm.interrupt_current_processing(False)
 

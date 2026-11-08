@@ -229,9 +229,9 @@ class H3Engine:
             raise Canceled()
 
     def _after_node(self):
-        """What ComfyUI's executor runs after every node under DynamicVRAM. Autoregressive text encoders
-        (MiniMax Music 3) record a per-thread CUDA malloc graph; without this the next job replays a stale one
-        and fails with a device-side assert."""
+        """What ComfyUI's executor runs after every node under DynamicVRAM; every pipeline must call it between
+        nodes. Autoregressive text encoders (MiniMax Music 3) record a per-thread CUDA malloc graph; without this
+        the next job replays a stale one and fails with a device-side assert."""
         import comfy.memory_management
         import comfy.model_prefetch
 
