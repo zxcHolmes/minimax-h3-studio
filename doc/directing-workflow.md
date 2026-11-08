@@ -15,10 +15,20 @@ Ask for the following together, reuse answers already given, and record them in 
 | Subject and audience | Story/topic, purpose, intended viewer, desired length, required content and constraints |
 | Frame | Landscape or portrait; recommend 16:9 for a film and 9:16 for mobile delivery |
 | Resolution | **768p by default**; offer 544p when the user prioritizes speed |
-| Video mode | **Reference to video**, using fixed character and location images |
+| Video mode | **Reference mode** by default; offer **fast mode** when the user wants maximum speed (see below) |
 | Spoken language | Confirm the default language of dialogue and narration; recommend Mandarin Chinese if appropriate |
 | Visual treatment | Anime/2D, stylized 3D, or realistic/live-action; recommend a treatment suited to the brief |
 | Subtitle languages | Source-language subtitles plus the user's requested translation language; ask which track should be default |
+
+The two video modes:
+
+| Mode | How it works | 5 s at 768p | Trade-off |
+| --- | --- | --- | --- |
+| **Reference mode** (default) | `fasth3-omniref`; each job receives the frozen character and location images as `ref_image` and composes the shot itself | ~67 s | Identity is held by the references throughout the shot; the model decides the exact framing |
+| **Fast mode** | `larryvrh-v4-sparse` (4 steps, all-step sparse attention); each job starts from a first frame, either the previous clip's last frame or a Qwen-composed picture | ~38 s | About 1.8× faster and gives exact control of the opening frame, but identity, cast and set are only as good as each first frame: it depends heavily on the image model composing every shot correctly |
+
+Recommend reference mode unless the user asks for speed above all. Within a fast-mode film, a single shot the
+image model cannot compose reliably may still be rendered in reference mode (section 7).
 
 Recommend a specific visual direction with a reason rather than offering only a list of styles. For example,
 a folklore adventure may suit stylized animation and a present-day suspense story may suit cinematic realism.
@@ -40,8 +50,10 @@ outputs/<title>/
   PROGRESS.md               current state and exact next steps for another session
   refs/characters/          fixed character images and explicit costume/age variants
   refs/locations/           fixed empty sets and consistent views of them
-  refs/shots/               optional compositions derived from the fixed references
+  refs/shots/               reference mode: optional compositions derived from the fixed references
+  refs/firstframes/         fast mode: selected first frame of every segment (Qwen-composed or chained)
   refs/candidates/          unselected image candidates
+  frames/                   fast mode: last frames extracted from accepted clips for chaining
   prompts/images/           exact reference-image generation/edit prompts
   prompts/video/            exact H3 prompts, one file per segment
   clips/                    accepted segments; rejected/ keeps replaced takes
@@ -92,7 +104,10 @@ Each storyboard entry must contain:
 
 - Segment ID, requested seconds, expected frames, actual seconds and position in the final edit.
 - Story purpose and new information; reference IDs for cast, location and any essential prop.
+- Fast mode only: first-frame source, `chain:<previous segment ID>` (the previous accepted clip's last frame)
+  or `compose` (a new Qwen first frame, listing the character and location references it is built from).
 - Opening state: character placement, gaze, pose, prop ownership, movement, light and camera orientation.
+  In fast mode this is the first frame; for a chained segment it is whatever the previous clip actually ends on.
 - Composition: shot size, viewpoint, lens feel, foreground/midground/background, focus and motivated camera move.
 - Timed action: start, development, consequence and reaction, with precise physical and visual details.
 - Exact dialogue/narration, speaker IDs, voice descriptions, delivery and allocated speaking windows.
@@ -144,9 +159,31 @@ bridge between them. Finish a sentence within its segment; place cuts at natural
 Use the same ambience and score specification, but review the assembled result for restarts and tonal jumps.
 If necessary, simplify the music or choose a quiet cut rather than claiming the score will be sample-continuous.
 
+### Fast mode: chain or compose each join
+
+In fast mode, decide for every join whether it is **continuous** or a **cut**:
+
+- **Continuous** (the same action, take or camera move carries on, with no change of angle): chain it. The next
+  segment's first frame is the previous accepted clip's last frame (section 7). Write the outgoing segment's
+  ending as a usable still: a settled pose, eyes open, mouth closed, no motion blur, no fast pan in the last
+  second, every needed character fully in frame. Chaining keeps people, set, light and props exactly where they
+  were; the model cannot know what happened before the frame, so restate it in the next prompt.
+  **Chain only when the last frame shows both the characters the next segment needs (faces readable) and the
+  set.** If the clip ends on an empty set, a close insert, a back view, a character off frame or a face too small
+  or blurred to carry identity, do not force continuity: the next segment would invent the missing person. Make it
+  a cut with a composed first frame instead, and accept the small discontinuity.
+- **Cut** (new angle, new location, time jump, or a character who must stay recognisable but whose framing
+  changes): compose a new first frame with Qwen from the frozen references (section 4).
+
+Limit chains to about three or four consecutive segments. Every generation re-encodes the picture, and faces,
+textures and costume details drift a little each time. Break a long continuous scene with a motivated cut to a
+freshly composed frame (a reaction shot, insert or reverse angle) to re-anchor identity, then chain again.
+
 ## 4. Generate and freeze character and location references
 
 **Lock character appearance first. Lock each location before rendering a video set there.**
+In reference mode these images go to the video jobs. In fast mode they are not sent to the video model; they
+are the inputs from which Qwen composes each segment's first frame, which then carries identity and set.
 Generate references with Studio's current picture models; a casting video is optional, not a prerequisite.
 This applies to both short stories and novel chapters. Principal and recurring characters need independent
 reference cards; one-off supporting characters, passersby and background crowds may be described directly
@@ -186,14 +223,6 @@ from the canonical view, then check that doors, windows, stairs and props occupy
 Reuse these images across chapters; register derived versions for changed lighting, weather or set state.
 Empty sets prevent background people from competing with the intended cast references.
 
-**Shot compositions:** when placement is complex, derive a single composition from selected character and
-location images using an editing model (currently at most four inputs). Record what it controls and verify
-that it has not changed faces, costume or geometry. It remains a reference, not a guaranteed first frame.
-
-Use only necessary references in a video job: normally one or two characters plus one location; the API
-accepts at most six images. Even establishing shots carry their location reference. Freeze selected assets
-before bulk video submission. Do not silently replace a canonical reference halfway through the production.
-
 Example text-to-image request (use the confirmed aspect ratio):
 
 ```bash
@@ -214,6 +243,61 @@ curl -fsS -X POST "$STUDIO_URL/api/jobs" \
 Poll until complete and download `picture_url`. Reference prompts must describe the actual character or
 set in full, including the production's visual treatment. Do not send storyboard placeholders to the API.
 
+**Shot compositions (reference mode):** when placement is complex, derive a single composition from selected
+character and location images using an editing model (currently at most four inputs). Record what it controls
+and verify that it has not changed faces, costume or geometry. It remains a reference, not a guaranteed first frame.
+
+Use only necessary references in a reference-mode video job: normally one or two characters plus one location;
+the API accepts at most six images. Even establishing shots carry their location reference. Freeze selected
+assets before bulk video submission (or, in fast mode, before composing first frames). Do not silently replace
+a canonical reference halfway through the production.
+
+### Fast mode: compose the first frame of every `compose` segment
+
+Fast mode stands or falls with these pictures. The video model sees only the first frame, so a wrong face, a
+merged or duplicated person, a missing character, a prop in the wrong hand or a distorted set goes straight into
+the clip. Inspect them as carefully as finished shots.
+
+Before any video job, fix the first frame of every segment whose source is `compose`. Use
+`qwen-image-21-turbo` in edit mode with `aspect_ratio=image`: the empty location image first (generated in the
+film's aspect ratio, it sets the canvas), then the one to three character cards in the shot (at most four inputs
+in all). Write `prompts/images/firstframes/<segment>.txt` describing exactly the storyboard's opening state:
+
+- who is in frame and where (left/right, foreground/background, distance from camera), referring to each input
+  as "the woman from image 2" and naming her costume, so Qwen copies the right person into the right place;
+- pose, gaze, expression, hand positions and who holds which prop;
+- shot size, camera height and angle, lens feel and depth of field;
+- the location's light, time of day and weather as in the bible, and the production's visual treatment;
+- a resting moment rather than peak action, so the video has room to start the movement;
+- "no readable text, letters, subtitles, logos or watermarks"; never mention a phone or screen unless one belongs
+  in the shot.
+
+A shot with no principal character (an establishing view, an insert, a crowd) edits from the location image
+alone, or uses text-to-image at the film's `aspect_ratio` when no location card applies. One-off extras are
+described in the first-frame prompt; they need no card.
+
+```bash
+curl -fsS -X POST "$STUDIO_URL/api/jobs" \
+  -F kind=image -F image_model=qwen-image-21-turbo -F aspect_ratio=image \
+  -F 'prompt=<prompts/images/firstframes/S001.txt' \
+  -F ref_image=@refs/locations/workshop.png \
+  -F ref_image=@refs/characters/lin.png
+```
+
+Generate two candidates per segment, inspect them on a contact sheet and select one into
+`refs/firstframes/<segment>.png`; keep the others in `refs/candidates/`. Check each face and costume against its
+card, the set's landmarks against the location image, the cast count, prop ownership, hands and the absence of
+text. Fix a near miss with a further Qwen edit of the chosen frame ("the same picture, but she holds the lamp in
+her right hand") rather than recomposing from scratch. Record the inputs and their order, prompt, job ID and seed
+in `03_reference_manifest.json`. All `compose` frames are independent of each other and of the video jobs, so
+compose them all up front, before submitting video. If a shot still fails after a few candidates and a repair edit
+(typically three or more principal characters, close physical interaction, or an unusual angle), render that shot
+in reference mode instead of forcing a weak frame.
+
+Chained segments get their first frame only after the previous clip is accepted (section 7). If an extracted
+last frame has a soft face, a blink or a broken hand, a light Qwen edit with the relevant character card as the
+second input may repair it; otherwise cut to a composed frame instead.
+
 ## 5. Fix voices in the bible and repeat them in video prompts
 
 For every speaking character and narrator, define a stable speaker ID such as `(S1)`, fixed English voice
@@ -232,9 +316,10 @@ The format rules below summarize MiniMax's official
 [full-reference guide](https://github.com/MiniMax-AI/MiniMax-H3/blob/main/.agents/skills/h3-prompt-writing/references/ref-en.txt)
 and [base audiovisual guide](https://github.com/MiniMax-AI/MiniMax-H3/blob/main/.agents/skills/h3-prompt-writing/references/base-en.txt),
 checked on 2026-10-28. They are embedded here so routine production does not require another search.
-The timing budgets, reference-lock procedure and continuity ledger above are Studio production conventions.
+The timing budgets, reference-lock and first-frame procedures and continuity ledger above are Studio
+production conventions.
 
-### Official format essentials
+### Official format essentials (reference mode)
 
 Use six English sections, in this order:
 `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
@@ -244,6 +329,8 @@ Define each referenced entity and its role. `<Subject N>` names reusable visible
 `<Picture N>` identifies an uploaded image. Keep meanings consistent. Use `[reference generation]` for this task.
 Retention markers include `fully_preserved`, `partially_preserved`, `attribute_transfer`, `weak_reference`;
 choose according to the defined role. A person reference can preserve identity without preserving its backdrop.
+
+### Rules shared by both modes
 
 Introduce style before `[Shot 1]`. The first shot has no timestamp; later shot markers denote actual cuts,
 not action phases. Describe composition, environment, light, action, state changes, camera and synchronized sound.
@@ -265,7 +352,8 @@ Maintain an explicit mapping from project assets to prompt labels in `jobs.json`
 throughout the film. The prompt builder must resolve every placeholder before submission.
 
 Each segment has one `[Shot 1]`; express its action phases in prose with local elapsed times.
-Do not reuse the old `[Shot 1, 00:00-00:05]` syntax. State actual segment duration in `summary`.
+Do not reuse the old `[Shot 1, 00:00-00:05]` syntax. State the actual segment duration (in `summary` in
+reference mode, in the `[Shot 1]` sentence in fast mode).
 Make every important action observable: which hand, which object, where it moves, what resists, what changes,
 and how the character reacts. Establish spatial anchors before moving the camera. Specify gaze, breathing,
 fabric, weather, reflections and focus changes when they contribute to the moment. Avoid contradictory
@@ -277,7 +365,7 @@ exact first/last frames. Do not describe a neutral character portrait as the loc
 In this server's Ref2VA route use `ref_image`, never `image` or `last_image`; the server rejects mixing them.
 An extracted accepted frame may be an additional continuity reference, but does not enforce a first frame.
 
-### Complete original example: one character plus one location
+### Complete original example (reference mode): one character plus one location
 
 This illustrative segment assumes Mandarin, 16:9, a 10 s request (10.125 s actual), character image first
 and empty location image second. Its spoken line, action budget and final gaze set up a reaction cut.
@@ -318,11 +406,59 @@ The unseen narrator, in the warm, low-register voice of a middle-aged man, speak
 
 Do not add this example narration to the sample segment without recalculating its time budget.
 
+### Fast mode prompt layout
+
+A first-frame segment uses three English sections after one opening line, with no `subject_definitions`,
+`summary` or `retention_analysis`: the frame itself carries identity and set.
+
+```text
+<Picture 1> is the first frame: <one sentence describing what the frame actually shows>
+
+detailed_description:
+<style line> [Shot 1] ...
+
+overall_soundscape:
+...
+
+non_diegetic_music:
+...
+```
+
+`<Picture 1>` is the uploaded first frame. The server prepends the official keyframe tag ("at 0.00 seconds into
+the target video, `<Picture 1>` (from [Shot 1]) is fully referenced") when the prompt lacks one. The model knows
+nothing beyond the frame and the prompt, so name each visible person by name plus costume or position ("Lin, the
+woman in the charcoal jacket on the left") instead of `<Subject N>`, and keep that wording stable across the film.
+
+**Write the prompt from the selected first frame, not only from the storyboard.** Look at the chosen
+`refs/firstframes/<segment>.png` (or the extracted last frame) and start `[Shot 1]` from what it shows: who stands
+where, who holds what, where they look. If the frame differs from the plan in a harmless way, change the prompt to
+match the frame. For a chained segment, say in one clause what was just happening ("still kneeling where she
+stopped the dial") so the movement continues rather than restarts. The first frame must not contain text either.
+Use `image` only in these jobs; do not add `ref_image` or `last_image`.
+
+The example segment above in fast mode, with its first frame composed by Qwen from the empty workshop image and
+Lin's card, begins:
+
+```text
+<Picture 1> is the first frame: Lin, a woman in her early thirties with straight black chin-length hair, a charcoal cotton jacket and a faded rust scarf, sits at the scarred oak workbench under the rain-streaked window of the mountain radio workshop, her right hand on the radio's tuning dial, the green steel door visible on the right.
+
+detailed_description:
+Cinematic realism with restrained slate blue and rust colors, soft overcast window light, natural skin texture and gentle highlight roll-off. No readable text, subtitles, captions, logos or watermarks.
+[Shot 1] A continuous 10.125-second medium close shot starting exactly from <Picture 1>, with no cuts. Lin stays in the left half of the frame; the green door remains visible on the right, separated from her by negative space. ...
+```
+
+The timed action, speech, `overall_soundscape` and `non_diegetic_music` stay as in the reference-mode example,
+with "Lin" in place of `<Subject 1>`.
+
 ## 7. Submit video jobs through the API
 
-Use `lora=fasth3-omniref` for every segment, `resolution=768p` unless confirmed otherwise, the confirmed
-aspect ratio and the frozen references. Do not send sampler/steps overrides: this model uses its fixed setup.
 Set `STUDIO_URL` from the project's deployment configuration; do not commit host secrets into production docs.
+Do not send sampler/steps overrides in either mode: both model choices use their fixed setup.
+
+### Reference mode
+
+Use `lora=fasth3-omniref` for every segment, `resolution=768p` unless confirmed otherwise, the confirmed
+aspect ratio and the frozen references.
 
 ```bash
 curl -fsS -X POST "$STUDIO_URL/api/jobs" \
@@ -337,10 +473,50 @@ job ID, returned seed, prompt path, duration and later output path in `jobs.json
 The image list must match the prompt; do not rely on filenames to convey reference roles to H3.
 
 Multiple ready segments may be submitted together: each is a separate `POST`, and the server queues them
-FIFO on one GPU worker. Finish reference dependencies first. A segment that needs a frame from an earlier
-result must wait for that result; independent segments can be queued immediately. Never duplicate jobs just
-because a polling request timed out; inspect existing IDs first.
+FIFO on one GPU worker. Finish reference dependencies first; independent segments can be queued immediately.
 
+### Fast mode
+
+Use `lora=larryvrh-v4-sparse` (the 4-step turbo LoRA with all-step Sol-Attn sparse attention) for every segment,
+`resolution=768p` unless confirmed otherwise, `aspect_ratio=image` and the segment's selected first frame as `image`.
+
+```bash
+curl -fsS -X POST "$STUDIO_URL/api/jobs" \
+  -F 'prompt=<prompts/video/S001.txt' \
+  -F resolution=768p -F lora=larryvrh-v4-sparse -F aspect_ratio=image -F duration=10 \
+  -F image=@refs/firstframes/S001.png
+```
+
+Save the request, first-frame path and its source (`compose` job ID or `chain:<segment>`), job ID, returned seed,
+prompt path, duration and later output path in `jobs.json` immediately after submission.
+
+**Chained segments.** When the previous segment's clip is accepted, extract its very last frame at full
+resolution and use it as the next segment's first frame:
+
+```bash
+ffmpeg -y -sseof -0.5 -i clips/S003.mp4 -update 1 frames/S003_last.png
+cp frames/S003_last.png refs/firstframes/S004.png
+```
+
+Inspect the extracted frame before submitting (face, hands, blur, blink). If it lacks a character the next
+segment needs, or the set, or a face is unreadable, switch that segment to `compose` (section 4) and update the
+storyboard; do not chain from it. Otherwise write the next prompt from it
+(section 6). A chain is strictly sequential: S004 cannot be submitted before S003 is done and accepted, and a
+redone S003 invalidates S004's frame.
+
+**Queueing.** Every `compose` segment and the first segment of every chain depend only on frozen first frames,
+so submit all of them together as soon as their frames are selected; each is a separate `POST` and the server
+queues them FIFO on one GPU worker. Feed the chained segments in as their predecessors finish. Interleaving
+several independent chains keeps the GPU busy.
+
+**Hard identity shots.** If the image model cannot compose a reliable first frame, or a first frame cannot hold a
+face through the action (a long turn away and back, a character entering from off frame, a large crowd around the
+lead), render that one segment in reference mode with the reference-mode prompt format. Log why. Its look differs
+slightly from the fast-mode shots, so review the joins on both sides.
+
+### Polling (both modes)
+
+Never duplicate jobs just because a polling request timed out; inspect existing IDs first.
 Poll `GET /api/jobs/{id}` about every 15 seconds in a background helper, download `video_url` on `done`,
 and log `failed`/cancelled results. Keep updates to the user going during long waits. Generate in manageable
 submission groups if useful, without imposing a mandatory user approval between groups.
@@ -356,6 +532,9 @@ ffmpeg -i clips/S001.mp4 -af volumedetect -vn -f null -
 
 Check identity/costume, location geometry/light, intended action and reaction, prop states, anatomy,
 unwanted text, timing and opening/closing state. Review adjacent clips together, not only in isolation.
+In fast mode, compare the faces in the last link of each chain against the character cards; if drift is visible, end the chain
+earlier and re-anchor the next segment with a composed frame. A chained segment's last frame must also pass
+the first-frame check, since it becomes the next segment's start.
 Inspect speech completeness later against the ASR result as well. Text and frame inspection cannot fully
 judge pronunciation or exact voice timbre; describe the verification actually performed and invite listening
 feedback where needed, without abandoning the remaining production work.
@@ -398,8 +577,9 @@ curl -fsS -X POST "$STUDIO_URL/api/jobs" \
   -F image=@cover.png
 ```
 
-Use the first-frame (fl2va) choice of the same model family as the film so the look matches, for example
-`pika-flex-fl2va-sparse-all` for a Pika H3 Flex film, `fasth3-v2` for a FastH3 film. `duration` is 3–5 seconds;
+Use the first-frame (fl2va) choice of the film's model family so the look matches: `fasth3-v2` for a
+reference-mode (FastH3 OmniRef) film, `larryvrh-v4-sparse` for a fast-mode film, `pika-flex-fl2va-sparse-all`
+for a Pika H3 Flex film. `duration` is 3–5 seconds;
 the frame count snaps to the 17k+5 grid as usual. The prompt starts from `<Picture 1>` (the server adds the
 keyframe tag if it is missing), describes the cover in one sentence and then one continuous shot with no cut:
 
@@ -434,10 +614,14 @@ spaces are safe. For segment `i`, compute `d_i = counted_video_frames / 24` and 
 ```
 
 These are filter templates: substitute numeric indexes, durations and count before running ffmpeg.
+In fast mode a chained segment's first frame is the previous clip's last frame, so drop it to avoid a one-frame freeze at the
+join: use `trim=start_frame=1,setpts=N/24/TB` for its video and `atrim=start=1/24,asetpts=PTS-STARTPTS` before the
+pad/trim of its audio, with `d_i = (counted_video_frames - 1) / 24`.
 Use `-fps_mode cfr -r 24 -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -c:a aac -b:a 192k
 -movflags +faststart`. Do not rebuild the final movie from already encoded preview assemblies.
 
-Verify with ffprobe: 24/1 frame rate, final frame count equals the accepted segments' sum, expected
+Verify with ffprobe: 24/1 frame rate, final frame count equals the accepted segments' sum minus one per
+chained join, expected
 resolution/orientation, and matching audio/video duration within codec/container rounding. Watch the joins
 for rhythm and continuity. Finish the edit **before** transcription so subtitle timestamps follow the deliverable.
 
