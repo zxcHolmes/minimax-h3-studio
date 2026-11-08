@@ -42,7 +42,7 @@ changes rather than asking the same questions every chapter:
 | Setting | Rule |
 | --- | --- |
 | Orientation | Confirm landscape or portrait and the chosen aspect ratio |
-| Resolution and mode | 768p by default, reference to video with FastH3 OmniRef |
+| Resolution and mode | 768p by default; reference mode (FastH3 OmniRef) by default, or fast mode (first frame + `larryvrh-v4-sparse`) when speed comes first |
 | Dialogue/narration | Confirm spoken language, whether narration is wanted and the fixed voices |
 | Treatment | Confirm anime/2D, stylized 3D or realism; recommend a specific style for the story |
 | Subtitles | Confirm translation language and default track; deliver original plus translation as soft tracks |
